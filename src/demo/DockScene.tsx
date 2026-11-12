@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { LiquidGlass, type LiquidGlassProps } from '../glass'
+import { LiquidSegmentedControl, LiquidSwitch } from './LiquidControls'
 
 interface AppDef {
   name: string
@@ -221,8 +222,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
 
   const [alphaTinted, setAlphaTinted] = useState(true)
   const [tintId, setTintId] = useState<(typeof GLASS_TINTS)[number]['id']>('smoke')
-  const [switchPressed, setSwitchPressed] = useState(false)
-  const [activeChip, setActiveChip] = useState<string>('All')
+  const [activeChip, setActiveChip] = useState<(typeof CHIPS)[number]>('All')
   const [searchQuery, setSearchQuery] = useState('')
 
   const activeTint = GLASS_TINTS.find((t) => t.id === tintId) ?? GLASS_TINTS[0]
@@ -269,75 +269,29 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
               })}
             </div>
 
-            <div className="switch-wrap">
+            <div className="switch-group">
               <span id="ui-tint-label" className="switch-label">
                 UI Tint
               </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={alphaTinted}
-                aria-labelledby="ui-tint-label"
-                className="apple-switch"
-                data-checked={alphaTinted ? 'true' : 'false'}
-                data-pressed={switchPressed ? 'true' : 'false'}
-                onClick={() => setAlphaTinted((v) => !v)}
-                onPointerDown={() => setSwitchPressed(true)}
-                onPointerUp={() => setSwitchPressed(false)}
-                onPointerLeave={() => setSwitchPressed(false)}
-                onPointerCancel={() => setSwitchPressed(false)}
-              >
-                <span className="apple-switch-thumb" data-lg-ignore="" aria-hidden="true">
-                  <LiquidGlass
-                    mode="layer"
-                    refractionTarget={sceneRef}
-                    strength={Math.max(glass.strength ?? 0.08, 0.09)}
-                    curvature={0.95}
-                    depth={6}
-                    splay={0.82}
-                    chroma={glass.chroma}
-                    blur={0}
-                    edgeHighlight={Math.max(glass.edgeHighlight ?? 0.9, 0.85)}
-                    glow={glass.glow}
-                    specularAngle={glass.specularAngle}
-                    specularMode={glass.specularMode}
-                  />
-                </span>
-              </button>
+              <LiquidSwitch
+                checked={alphaTinted}
+                onChange={setAlphaTinted}
+                glass={glass}
+                refractionTarget={sceneRef}
+                ariaLabelledBy="ui-tint-label"
+              />
             </div>
           </div>
 
-          <nav className="seg-bar" aria-label="Library filter">
-            {CHIPS.map((chip) => {
-              const selected = activeChip === chip
-              return (
-                <LiquidGlass
-                  key={chip}
-                  mode="wrapper"
-                  className="seg-chip"
-                  refractionTarget={sceneRef}
-                  tint={selected && alphaTinted ? activeTint.color : undefined}
-                  strength={0.07}
-                  depth={8}
-                  blur={0}
-                  chroma={0.6}
-                  glow={selected ? 1 : 0.6}
-                  edgeHighlight={selected ? 1 : 0.65}
-                  specularAngle={glass.specularAngle}
-                  specularMode={glass.specularMode}
-                >
-                  <button
-                    type="button"
-                    className={'seg-chip-btn' + (selected ? ' seg-chip-btn--on' : '')}
-                    aria-pressed={selected}
-                    onClick={() => setActiveChip(chip)}
-                  >
-                    {chip}
-                  </button>
-                </LiquidGlass>
-              )
-            })}
-          </nav>
+          <LiquidSegmentedControl
+            options={CHIPS}
+            value={activeChip}
+            onChange={setActiveChip}
+            glass={glass}
+            refractionTarget={sceneRef}
+            tint={alphaTinted && tintId !== 'smoke' ? activeTint.color : undefined}
+            ariaLabel="Library filter"
+          />
         </div>
       </header>
 

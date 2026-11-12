@@ -341,14 +341,10 @@ button {
   outline-offset: 2px;
 }
 
-.switch-wrap {
+.switch-group {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 4px 5px 4px 12px;
-  border-radius: 99px;
-  background: rgb(12 14 20 / 0.56);
-  border: 1px solid rgb(255 255 255 / 0.1);
+  gap: 10px;
 }
 
 .switch-label {
@@ -356,103 +352,174 @@ button {
   font-weight: 600;
   color: rgb(255 255 255 / 0.86);
   letter-spacing: 0.01em;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
   user-select: none;
 }
 
-/* Apple iOS 26 style switch: track painted in domSnapshot so the sliding glass thumb refracts the seam */
-.apple-switch {
+/* iOS 26/27 Liquid Glass switch: slim track in domSnapshot + protruding clear refractive capsule */
+.liquid-switch {
   position: relative;
-  width: 66px;
-  height: 34px;
+  width: 76px;
+  height: 38px;
   padding: 0;
+  border: 0;
+  background: transparent;
   border-radius: 999px;
-  border: 1px solid rgb(255 255 255 / 0.18);
-  background: rgb(120 120 128 / 0.44);
-  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.36);
   cursor: pointer;
   flex-shrink: 0;
+  touch-action: pan-y;
   -webkit-tap-highlight-color: transparent;
 }
 
-.apple-switch[data-checked='true'] {
-  background: #34c759;
-  border-color: rgb(255 255 255 / 0.28);
-  box-shadow:
-    inset 0 1px 3px rgb(0 0 0 / 0.18),
-    0 0 14px rgb(52 199 89 / 0.25);
-}
-
-.apple-switch:focus-visible {
+.liquid-switch:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 3px;
 }
 
-.apple-switch-thumb {
+.liquid-switch-track {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 36px;
-  height: 26px;
+  inset: 5px 2px;
   border-radius: 999px;
-  background-color: rgb(255 255 255 / 0.78);
-  box-shadow: 0 3px 10px rgb(0 0 0 / 0.3);
-  transform: translateX(0);
+  background: rgb(118 118 134 / 0.34);
+  border: 1px solid rgb(255 255 255 / 0.22);
+  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.36);
+  pointer-events: none;
+}
+
+.liquid-switch[data-checked='true'] .liquid-switch-track {
+  background: linear-gradient(180deg, #32d759 0%, #27be4c 100%);
+  border-color: rgb(255 255 255 / 0.34);
+  box-shadow:
+    inset 0 1px 3px rgb(0 0 0 / 0.16),
+    0 0 16px rgb(52 199 89 / 0.3);
+}
+
+.liquid-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 44px;
+  height: 34px;
+  border-radius: 999px;
+  background-color: rgb(255 255 255 / 0.2);
+  box-shadow:
+    0 5px 14px rgb(0 0 0 / 0.4),
+    0 1px 3px rgb(0 0 0 / 0.24);
+  transform: translate3d(0, 0, 0);
+  pointer-events: none;
   transition:
-    transform 260ms cubic-bezier(0.32, 1.18, 0.45, 1),
+    transform 280ms cubic-bezier(0.28, 1.24, 0.45, 1),
     width 170ms ease,
     height 170ms ease,
     top 170ms ease,
     background-color 150ms ease;
 }
 
-.apple-switch[data-checked='true'] .apple-switch-thumb {
-  transform: translateX(22px);
+.liquid-switch[data-checked='true'] .liquid-switch-thumb {
+  transform: translate3d(32px, 0, 0);
 }
 
-.apple-switch:hover .apple-switch-thumb {
-  background-color: rgb(255 255 255 / 0.56);
-}
-
-.apple-switch[data-pressed='true'] .apple-switch-thumb {
-  top: 1px;
-  width: 44px;
-  height: 30px;
+.liquid-switch:hover .liquid-switch-thumb {
   background-color: rgb(255 255 255 / 0.14);
-  transform: translateX(-1px);
 }
 
-.apple-switch[data-checked='true'][data-pressed='true'] .apple-switch-thumb {
-  transform: translateX(15px);
+.liquid-switch[data-pressed='true'] .liquid-switch-thumb {
+  top: 0.5px;
+  width: 50px;
+  height: 37px;
+  background-color: rgb(255 255 255 / 0.08);
+  transform: translate3d(-2px, 0, 0);
 }
 
-.seg-bar {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+.liquid-switch[data-checked='true'][data-pressed='true'] .liquid-switch-thumb {
+  transform: translate3d(28px, 0, 0);
 }
 
-.seg-chip {
-  width: 92px;
-  height: 40px;
-  border-radius: 20px;
+.liquid-switch[data-scrubbing='true'] .liquid-switch-thumb {
+  transition:
+    width 120ms ease,
+    height 120ms ease,
+    top 120ms ease,
+    background-color 120ms ease;
 }
 
-.seg-chip-btn {
-  width: 100%;
-  height: 100%;
-  background: none;
+/* Apple Liquid Glass segmented control: continuous track with lifted overhanging glass lens */
+.liquid-seg {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  height: 48px;
+  padding: 5px;
+  border-radius: 999px;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.liquid-seg-track {
+  position: absolute;
+  inset: 5px;
+  border-radius: 999px;
+  background: rgb(22 24 38 / 0.68);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.34);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.liquid-seg-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 48px;
+  width: calc((100% - 10px) / var(--seg-count, 4) + 10px);
+  border-radius: 999px;
+  background-color: rgb(255 255 255 / 0.06);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.38);
+  pointer-events: none;
+  z-index: 1;
+  transition:
+    transform 300ms cubic-bezier(0.28, 1.18, 0.45, 1),
+    background-color 160ms ease;
+}
+
+.liquid-seg[data-scrubbing='true'] .liquid-seg-thumb {
+  background-color: rgb(255 255 255 / 0.04);
+  transition: background-color 120ms ease;
+}
+
+.liquid-seg-btn {
+  position: relative;
+  z-index: 2;
+  min-width: 82px;
+  height: 38px;
+  padding: 0 16px;
   border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(255 255 255 / 0.68);
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  color: rgb(255 255 255 / 0.82);
-  border-radius: inherit;
-  transition: color 150ms, background-color 150ms;
+  transition: color 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.seg-chip-btn--on {
+.liquid-seg-btn:hover {
+  color: rgb(255 255 255 / 0.9);
+}
+
+.liquid-seg-btn--on {
   color: #fff;
-  background: rgb(255 255 255 / 0.1);
+}
+
+.liquid-seg-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }
 
 .scene-cards {
@@ -1083,8 +1150,10 @@ button {
     font-size: 48px;
   }
 
-  .seg-chip {
-    width: 74px;
+  .liquid-seg-btn {
+    min-width: 66px;
+    padding: 0 11px;
+    font-size: 13px;
   }
 
   .dock-icons {
@@ -1135,7 +1204,8 @@ button {
     animation: none;
   }
 
-  .apple-switch-thumb,
+  .liquid-switch-thumb,
+  .liquid-seg-thumb,
   .card,
   .app-icon {
     transition: none;
