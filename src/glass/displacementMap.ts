@@ -1,3 +1,4 @@
+import { bevelFade, bevelWidth, profileExponent, profilePeak, profileSpread, rawMagnitude } from './optics'
 import type { OpticalParams } from './types'
 
 /**
@@ -32,17 +33,9 @@ type MapParams = Pick<OpticalParams, 'depth' | 'curvature' | 'splay'>
 
 const MAX_MAP_PIXELS = 360_000
 const LUT_SIZE = 256
-const IOR = 1.5
 
 const cache = new Map<string, GeneratedMap>()
 const CACHE_LIMIT = 48
-
-/** Bevel thickness in px. `depth` 1…50 maps onto 15 %…100 % of the half-extent. */
-export function bevelWidth(width: number, height: number, depth: number): number {
-  const half = Math.min(width, height) / 2
-  const t = Math.min(1, Math.max(0, depth / 50))
-  return Math.max(2, Math.min(half, half * (0.04 + 0.96 * Math.sqrt(t))))
-}
 
 export function mapCacheKey(g: MapGeometry, p: MapParams): string {
   return [g.width, g.height, g.radius.toFixed(1), p.depth.toFixed(1), p.curvature.toFixed(2), p.splay.toFixed(2)].join('_')
@@ -50,26 +43,13 @@ export function mapCacheKey(g: MapGeometry, p: MapParams): string {
 
 /** Normalised (peak = 1) refraction magnitude along the bevel, t = 0 (rim) … 1 (interior). */
 function buildProfile(curvature: number, splay: number): Float32Array {
-  const n = 1 + curvature * 3
-  const spread = 1 + splay // t' = t^spread : bigger splay ⇒ effect reaches deeper
+  const n = profileExponent(curvature)
+  const spread = profileSpread(splay)
+  const peak = profilePeak(n, spread)
   const lut = new Float32Array(LUT_SIZE)
-  let peak = 0
   for (let i = 0; i < LUT_SIZE; i++) {
-    const t = Math.pow(i / (LUT_SIZE - 1), spread)
-    const inv = 1 - t
-    const base = Math.max(1e-6, 1 - Math.pow(inv, n))
-    const slope = Math.pow(base, 1 / n - 1) * Math.pow(inv, n - 1)
-    const theta = Math.atan(slope)
-    const thetaR = Math.asin(Math.sin(theta) / IOR)
-    const m = Math.tan(theta - thetaR)
-    lut[i] = m
-    if (m > peak) peak = m
-  }
-  for (let i = 0; i < LUT_SIZE; i++) lut[i] = peak > 0 ? lut[i] / peak : 0
-  // Guarantee a smooth landing on the flat interior.
-  for (let i = 0; i < LUT_SIZE; i++) {
-    const u = i / (LUT_SIZE - 1)
-    lut[i] *= u > 0.85 ? Math.max(0, (1 - u) / 0.15) : 1
+    const t = i / (LUT_SIZE - 1)
+    lut[i] = peak > 0 ? (rawMagnitude(t, n, spread) / peak) * bevelFade(t) : 0
   }
   return lut
 }

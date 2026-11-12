@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-export type GlassEngine = 'auto' | 'svg' | 'fallback'
+/** auto = SVG backdrop-filter where supported, else WebGL (inside a <GlassScene>), else CSS ring. */
+export type GlassEngine = 'auto' | 'svg' | 'webgl' | 'fallback'
 
 /** Optical parameters shared by the component, the map generator and the filter registry. */
 export interface OpticalParams {

@@ -1,14 +1,17 @@
 import type { GlassEngine } from './types'
+import { isWebGLAvailable } from './webglEngine'
 
 /**
- * Engine / feature detection.
+ * Engine selection.
  *
- * Chromium and Firefox accept `backdrop-filter: url(#id)`. Every WebKit build
- * (desktop Safari and *all* iOS browsers, including Chrome/Firefox for iOS) drops
- * `url()` from `-webkit-backdrop-filter`, so they take the bevel-ring fallback.
+ *  svg      – `backdrop-filter: url(#filter)`: live DOM refraction (Chromium, Firefox).
+ *  webgl    – shared WebGL shader refracting a mirrored <GlassScene> texture. Works on
+ *             every WebKit build (Safari + all iOS browsers), which drop `url()` from
+ *             `-webkit-backdrop-filter`.
+ *  fallback – masked bevel-ring backdrop blur; used when WebGL is unavailable or the
+ *             glass is not inside a <GlassScene>.
  */
-
-export type ResolvedEngine = 'svg' | 'fallback'
+export type ResolvedEngine = 'svg' | 'webgl' | 'fallback'
 
 function detectWebKit(): boolean {
   if (typeof navigator === 'undefined') return false
@@ -18,8 +21,7 @@ function detectWebKit(): boolean {
     // iPadOS reports itself as a Mac
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   if (iOS) return true
-  const safari = /safari/i.test(ua) && !/chrome|chromium|crios|android|edg|opr|fxios/i.test(ua)
-  return safari
+  return /safari/i.test(ua) && !/chrome|chromium|crios|android|edg|opr|fxios/i.test(ua)
 }
 
 function acceptsBackdropUrl(): boolean {
@@ -31,19 +33,24 @@ function acceptsBackdropUrl(): boolean {
   return el.style.getPropertyValue('-webkit-backdrop-filter').includes('url(')
 }
 
-let cached: ResolvedEngine | null = null
+let autoPick: 'svg' | 'webgl' | null = null
 
-export function detectEngine(): ResolvedEngine {
-  if (cached) return cached
-  if (typeof window !== 'undefined') {
-    const q = new URLSearchParams(window.location.search).get('engine')
-    if (q === 'svg' || q === 'fallback') return (cached = q)
+function auto(): 'svg' | 'webgl' {
+  if (autoPick) return autoPick
+  const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('engine') : null
+  if (q === 'svg' || q === 'webgl') return (autoPick = q)
+  return (autoPick = detectWebKit() || !acceptsBackdropUrl() ? 'webgl' : 'svg')
+}
+
+export function resolveEngine(pref: GlassEngine | undefined, hasScene: boolean): ResolvedEngine {
+  let want: GlassEngine = pref ?? 'auto'
+  if (want === 'auto') {
+    const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('engine') : null
+    want = q === 'fallback' ? 'fallback' : auto()
   }
-  cached = detectWebKit() || !acceptsBackdropUrl() ? 'fallback' : 'svg'
-  return cached
+  if (want === 'webgl' && !(hasScene && isWebGLAvailable())) return 'fallback'
+  return want
 }
 
-export function resolveEngine(pref: GlassEngine | undefined): ResolvedEngine {
-  return pref === 'svg' || pref === 'fallback' ? pref : detectEngine()
-}
-
+/** What `auto` resolves to for a glass that lives inside a <GlassScene>. */
+export const detectEngine = (): ResolvedEngine => resolveEngine('auto', true)

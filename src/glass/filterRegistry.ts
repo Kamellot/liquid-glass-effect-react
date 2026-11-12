@@ -1,4 +1,5 @@
 import { generateDisplacementMap, type MapGeometry } from './displacementMap'
+import { CHROMA_SPREAD, STRENGTH_GAIN } from './optics'
 import type { OpticalParams } from './types'
 
 /**
@@ -14,10 +15,6 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
 const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const GC_DELAY = 1200
 
-/** Max chromatic spread between R and B displacement scale at chroma = 1. */
-const CHROMA_SPREAD = 0.045
-/** Peak displacement in px = strength × min(w, h) × STRENGTH_GAIN. */
-const STRENGTH_GAIN = 1
 
 export interface FilterSpec extends MapGeometry, Pick<OpticalParams, 'depth' | 'curvature' | 'splay' | 'strength' | 'chroma' | 'blur'> {}
 

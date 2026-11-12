@@ -1,6 +1,7 @@
 export { LiquidGlass } from './LiquidGlass'
+export { GlassScene } from './GlassScene'
 export { getFilterStats, subscribeFilterStats } from './filterRegistry'
-export { detectEngine } from './engine'
+export { getGLStats, subscribeGLStats } from './webglEngine'
+export { detectEngine, resolveEngine, type ResolvedEngine } from './engine'
 export { DEFAULTS } from './types'
 export type { LiquidGlassProps, GlassEngine, OpticalParams, LightingParams } from './types'
-

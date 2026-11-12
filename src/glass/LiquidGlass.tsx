@@ -1,7 +1,9 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { bevelWidth } from './displacementMap'
+import { memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { bevelWidth } from './optics'
 import { resolveEngine } from './engine'
 import { acquireFilter } from './filterRegistry'
+import { SceneContext } from './GlassScene'
+import { createGlassGL, type GlassGLHandle } from './webglEngine'
 import { DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
 
@@ -77,7 +79,8 @@ function LiquidGlassImpl({
 }: LiquidGlassProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const { w, h, r } = useMetrics(hostRef, size, borderRadius)
-  const engine = useMemo(() => resolveEngine(enginePref), [enginePref])
+  const scene = useContext(SceneContext)
+  const engine = useMemo(() => resolveEngine(enginePref, !!scene), [enginePref, scene])
 
   // ---- Refraction filter (shared, ref-counted, deduplicated by hash) ----------
   const [filterId, setFilterId] = useState<string | null>(null)
@@ -89,6 +92,24 @@ function LiquidGlassImpl({
     const handle = acquireFilter({ width: w, height: h, radius: r, depth, curvature, splay, strength, chroma, blur })
     setFilterId(handle.id)
     return handle.release
+  }, [engine, w, h, r, depth, curvature, splay, strength, chroma, blur])
+
+  // ---- WebGL engine (shared context; this instance only owns a 2D canvas) -------
+  const glCanvasRef = useRef<HTMLCanvasElement>(null)
+  const glRef = useRef<GlassGLHandle | null>(null)
+  useLayoutEffect(() => {
+    if (engine !== 'webgl' || !scene || !glCanvasRef.current) return
+    const handle = createGlassGL(glCanvasRef.current, scene)
+    glRef.current = handle
+    return () => {
+      handle.destroy()
+      glRef.current = null
+    }
+  }, [engine, scene])
+  useLayoutEffect(() => {
+    if (engine === 'webgl' && w >= 2 && h >= 2) {
+      glRef.current?.update({ width: w, height: h, radius: r, depth, curvature, splay, strength, chroma, blur })
+    }
   }, [engine, w, h, r, depth, curvature, splay, strength, chroma, blur])
 
   // ---- Lighting vars (pure CSS custom properties → no layout, no filter rebuild) --
@@ -129,6 +150,8 @@ function LiquidGlassImpl({
     >
       {engine === 'svg' ? (
         <div className="lg-refract" style={refractStyle} />
+      ) : engine === 'webgl' ? (
+        <canvas ref={glCanvasRef} className="lg-gl" />
       ) : (
         <>
           <div className="lg-fb-base" />

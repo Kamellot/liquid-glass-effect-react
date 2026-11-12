@@ -1,7 +1,8 @@
 /* ───────────────────────────── Liquid Glass material ─────────────────────────────
    Layer stack (bottom → top), all `border-radius: inherit`:
      1. refraction   – backdrop-filter: url(#svg) …            (Chromium / Firefox)
-                       or dual bevel-ring backdrop blur         (WebKit fallback)
+                       or a canvas fed by the shared WebGL shader (Safari / iOS)
+                       or dual bevel-ring backdrop blur         (last-resort CSS fallback)
      2. ::before     – inner specular glow  (inset box-shadow, light-angle driven)
      3. ::after      – 1px directional rim  (conic-gradient + composite border mask)
    Everything is parameterised through custom properties set by <LiquidGlass />,
@@ -32,12 +33,20 @@
 }
 
 .lg-refract,
+.lg-gl,
 .lg-fb-base,
 .lg-fb-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   box-sizing: border-box;
+}
+
+/* WebGL path: a plain 2D canvas that receives the shader output. */
+.lg-gl {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 /* ── Layer 2 · refraction ─────────────────────────────────────────────────────── */

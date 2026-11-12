@@ -1,13 +1,13 @@
 import { useCallback, useId } from 'react'
 import { PRESETS, SLIDERS, type DemoParams, type SliderDef } from './presets'
-import type { GlassEngine } from '../glass'
+import type { GlassEngine, ResolvedEngine } from '../glass'
 
 interface Props {
   params: DemoParams
   onChange: (patch: Partial<DemoParams>) => void
   engine: GlassEngine
   onEngine: (e: GlassEngine) => void
-  resolvedEngine: string
+  resolvedEngine: ResolvedEngine
   stats: string
   open: boolean
   onToggle: () => void
@@ -36,9 +36,16 @@ function Row({ def, value, onChange }: { def: SliderDef; value: number; onChange
 
 const ENGINES: { id: GlassEngine; label: string }[] = [
   { id: 'auto', label: 'Auto' },
+  { id: 'webgl', label: 'WebGL' },
   { id: 'svg', label: 'SVG' },
-  { id: 'fallback', label: 'WebKit' },
+  { id: 'fallback', label: 'CSS Ring' },
 ]
+
+const PATH_LABELS: Record<ResolvedEngine, string> = {
+  svg: 'backdrop-filter: url(#svg)',
+  webgl: 'WebGL SDF shader (Safari / iOS)',
+  fallback: 'CSS dual bevel-ring',
+}
 
 export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngine, stats, open, onToggle }: Props) {
   const set = useCallback((key: keyof DemoParams) => (v: number) => onChange({ [key]: v }), [onChange])
@@ -83,7 +90,7 @@ export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngin
               ))}
             </div>
             <span className="cp-stat">
-              path: <b>{resolvedEngine === 'svg' ? 'backdrop-filter: url()' : 'WebKit bevel ring'}</b>
+              path: <b>{PATH_LABELS[resolvedEngine]}</b>
             </span>
             <span className="cp-stat">{stats}</span>
           </div>
@@ -92,4 +99,3 @@ export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngin
     </aside>
   )
 }
-

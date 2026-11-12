@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { LiquidGlass, type LiquidGlassProps } from '../glass'
+import { GlassScene, LiquidGlass, type LiquidGlassProps } from '../glass'
 
 /** Hero: huge type over a cosmic photo + a circular lens you can drag with pointer events. */
 export function Hero({ lens }: { lens: LiquidGlassProps & { size: number } }) {
@@ -76,7 +76,12 @@ export function Hero({ lens }: { lens: LiquidGlassProps & { size: number } }) {
 
   const onKey = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 40 : 12
-    const d: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }
+    const d: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step],
+    }
     const v = d[e.key]
     if (!v || !pos.current) return
     e.preventDefault()
@@ -88,31 +93,32 @@ export function Hero({ lens }: { lens: LiquidGlassProps & { size: number } }) {
 
   return (
     <section className="hero" aria-labelledby="hero-title">
-      <div className="hero-stage" ref={stageRef}>
-        <div className="hero-photo" role="img" aria-label="Cosmic nebula photograph" />
-        <h1 id="hero-title" className="hero-title">
-          It refracts anything
-          <br />— even DOM
-        </h1>
-        <p className="hero-sub">
-          The circle starts here. Drag it across the text and the photo boundary — every pixel underneath is bent by a real
-          SVG displacement map, not a screenshot.
-        </p>
-        <div
-          ref={handleRef}
-          className="lens-handle"
-          style={{ width: lens.size, height: lens.size }}
-          onPointerDown={onDown}
-          onPointerMove={onMove}
-          onPointerUp={onUp}
-          onPointerCancel={onUp}
-          onKeyDown={onKey}
-          aria-label="Draggable glass lens (arrow keys move it)"
-          tabIndex={0}
-        >
-          <LiquidGlass mode="wrapper" {...lens} />
-        </div>
-      </div>
-    </section>
+        <GlassScene className="hero-stage" elRef={stageRef}>
+          <div className="hero-photo" role="img" aria-label="Cosmic nebula photograph" />
+          <h1 id="hero-title" className="hero-title">
+            It refracts anything
+            <br />— even DOM
+          </h1>
+          <p className="hero-sub">
+            The circle starts here. Drag it across the text and the photo boundary — every pixel underneath is bent in real time
+            by an analytical SDF (SVG displacement on Chromium, WebGL shader on Safari &amp; iOS).
+          </p>
+          <div
+            ref={handleRef}
+            data-glass-ignore=""
+            className="lens-handle"
+            style={{ width: lens.size, height: lens.size }}
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            onKeyDown={onKey}
+            aria-label="Draggable glass lens (arrow keys move it)"
+            tabIndex={0}
+          >
+            <LiquidGlass mode="wrapper" {...lens} />
+          </div>
+    </GlassScene>
+    </section >
   )
 }
