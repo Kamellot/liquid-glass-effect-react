@@ -31,7 +31,7 @@ export interface SliderDef {
 export const SLIDERS: SliderDef[] = [
   { key: 'size', label: 'Size', min: 40, max: 360, step: 1, decimals: 0 },
   { key: 'chroma', label: 'Chroma', min: 0, max: 1, step: 0.01, decimals: 2 },
-  { key: 'depth', label: 'Depth', min: 1, max: 50, step: 1, decimals: 0 },
+  { key: 'depth', label: 'Depth', min: 1, max: 100, step: 1, decimals: 0 },
   { key: 'blur', label: 'Blur', min: 0, max: 20, step: 0.1, decimals: 1 },
   { key: 'edgeHighlight', label: 'Edge Highlight', min: 0, max: 1, step: 0.01, decimals: 2 },
   { key: 'strength', label: 'Strength', min: 0, max: 0.2, step: 0.001, decimals: 3 },

@@ -8,7 +8,7 @@ export interface LiquidGlassOptions {
   strength?: number
   /** Bevel curvature / refractive steepness (0.00 to 1.00). */
   curvature?: number
-  /** Bevel thickness inward from the border in pixels (1 to 50). */
+  /** Bevel thickness inward from the border in pixels (1 to 100). */
   depth?: number
   /** How broadly refraction splays across the bevel depth (0.00 to 1.00). */
   splay?: number
@@ -60,7 +60,7 @@ export const DEFAULT_LENS_SIZE = 166
 export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size' | 'tint'>> = {
   strength: 0.08,
   curvature: 0.99,
-  depth: 4,
+  depth: 18,
   splay: 0.76,
   chroma: 1.0,
   blur: 0.0,

@@ -158,7 +158,7 @@ export function Hero({ lens }: HeroProps) {
             <div className="debug-title">R/G Displacement Map</div>
             <div className="debug-row">
               {mapInfo ? `${mapInfo.width}×${mapInfo.height}px · r${Math.round(mapInfo.borderRadius)}` : 'Initializing…'}
-              {` · depth ${lens.depth ?? 4}px`}
+              {` · depth ${lens.depth ?? 18}px`}
             </div>
             <div className="debug-row debug-row--muted">
               <span>1/4 SDF mirrored</span>
