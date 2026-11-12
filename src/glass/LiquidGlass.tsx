@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -100,9 +101,16 @@ export const LiquidGlass = memo(function LiquidGlass({
   const isStandalone = mode === 'wrapper' && !hasChildren
   const explicitSize = mode === 'wrapper' ? size : undefined
 
+  // Sync resolved refractionTarget after mount/commit (parent RefObjects attach after child useLayoutEffect in React 19)
   useLayoutEffect(() => {
-    setTargetEl(resolveTarget(refractionTarget))
-  }, [refractionTarget])
+    const resolved = resolveTarget(refractionTarget)
+    setTargetEl((prev) => (prev === resolved ? prev : resolved))
+  })
+
+  useEffect(() => {
+    const resolved = resolveTarget(refractionTarget)
+    setTargetEl((prev) => (prev === resolved ? prev : resolved))
+  })
 
   // Track box dimensions and computed border-radius via ResizeObserver
   useLayoutEffect(() => {

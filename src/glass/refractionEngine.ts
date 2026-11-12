@@ -96,6 +96,10 @@ function notifyStats(): void {
 }
 
 export function getEngineStats(): EngineStats {
+  const snapCount = getSnapshotCount()
+  if (cachedStats.snapshots !== snapCount) {
+    cachedStats = { ...cachedStats, snapshots: snapCount }
+  }
   return cachedStats
 }
 

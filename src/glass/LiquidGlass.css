@@ -38,12 +38,10 @@
   pointer-events: none;
 }
 
-/* Rounded corner clip + iOS WebKit compositing mask fix for animated <canvas> layers */
+/* Rounded corner clip for the refracted bevel <canvas> */
 .lg-refract-clip {
   z-index: 0;
   overflow: hidden;
-  -webkit-mask-image: -webkit-radial-gradient(white, black);
-  transform: translateZ(0);
 }
 
 .lg-refract-canvas {
@@ -67,12 +65,10 @@
     inset calc(var(--lg-lx) * -14px) calc(var(--lg-ly) * -14px) 26px -4px rgb(205 224 255 / calc(0.18 * var(--lg-glow))),
     inset calc(var(--lg-lx) * 5px) calc(var(--lg-ly) * 5px) 14px -3px rgb(175 202 255 / calc(0.12 * var(--lg-glow))),
     inset 0 0 18px 0 rgb(255 255 255 / calc(0.08 * var(--lg-glow)));
-  background: radial-gradient(
-    120% 95% at calc(50% + var(--lg-lx) * 38%) calc(50% + var(--lg-ly) * 38%),
-    rgb(255 255 255 / calc(0.16 * var(--lg-glow))) 0%,
-    rgb(255 255 255 / calc(0.04 * var(--lg-glow))) 44%,
-    transparent 74%
-  );
+  background: radial-gradient(120% 95% at calc(50% + var(--lg-lx) * 38%) calc(50% + var(--lg-ly) * 38%),
+      rgb(255 255 255 / calc(0.16 * var(--lg-glow))) 0%,
+      rgb(255 255 255 / calc(0.04 * var(--lg-glow))) 44%,
+      transparent 74%);
 }
 
 /* Official Apple Liquid Glass glow: uniform top & bottom volumetric lip, clean sides */
@@ -82,33 +78,29 @@
     inset 0 16px 24px -13px rgb(215 230 255 / calc(0.16 * var(--lg-glow))),
     inset 0 -7px 13px -6px rgb(255 255 255 / calc(0.28 * var(--lg-glow))),
     inset 0 -16px 24px -13px rgb(215 230 255 / calc(0.14 * var(--lg-glow)));
-  background: linear-gradient(
-    180deg,
-    rgb(255 255 255 / calc(0.13 * var(--lg-glow))) 0%,
-    rgb(255 255 255 / calc(0.03 * var(--lg-glow))) 24%,
-    transparent 44%,
-    transparent 56%,
-    rgb(255 255 255 / calc(0.03 * var(--lg-glow))) 76%,
-    rgb(255 255 255 / calc(0.11 * var(--lg-glow))) 100%
-  );
+  background: linear-gradient(180deg,
+      rgb(255 255 255 / calc(0.13 * var(--lg-glow))) 0%,
+      rgb(255 255 255 / calc(0.03 * var(--lg-glow))) 24%,
+      transparent 44%,
+      transparent 56%,
+      rgb(255 255 255 / calc(0.03 * var(--lg-glow))) 76%,
+      rgb(255 255 255 / calc(0.11 * var(--lg-glow))) 100%);
 }
 
 /* Razor-sharp 1.5px specular border rim masked strictly to the border ring */
 .lg-rim {
   z-index: 0;
   padding: 1.5px;
-  background: conic-gradient(
-    from var(--lg-specular-angle, 71deg),
-    rgb(255 255 255 / calc(0.92 * var(--lg-edge-highlight))) 0deg,
-    rgb(220 232 255 / calc(0.42 * var(--lg-edge-highlight))) 38deg,
-    rgb(255 255 255 / calc(0.06 * var(--lg-edge-highlight))) 95deg,
-    rgb(255 255 255 / calc(0.04 * var(--lg-edge-highlight))) 138deg,
-    rgb(205 224 255 / calc(0.38 * var(--lg-edge-highlight))) 180deg,
-    rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 222deg,
-    rgb(255 255 255 / calc(0.08 * var(--lg-edge-highlight))) 272deg,
-    rgb(220 232 255 / calc(0.48 * var(--lg-edge-highlight))) 322deg,
-    rgb(255 255 255 / calc(0.92 * var(--lg-edge-highlight))) 360deg
-  );
+  background: conic-gradient(from var(--lg-specular-angle, 71deg),
+      rgb(255 255 255 / calc(0.92 * var(--lg-edge-highlight))) 0deg,
+      rgb(220 232 255 / calc(0.42 * var(--lg-edge-highlight))) 38deg,
+      rgb(255 255 255 / calc(0.06 * var(--lg-edge-highlight))) 95deg,
+      rgb(255 255 255 / calc(0.04 * var(--lg-edge-highlight))) 138deg,
+      rgb(205 224 255 / calc(0.38 * var(--lg-edge-highlight))) 180deg,
+      rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 222deg,
+      rgb(255 255 255 / calc(0.08 * var(--lg-edge-highlight))) 272deg,
+      rgb(220 232 255 / calc(0.48 * var(--lg-edge-highlight))) 322deg,
+      rgb(255 255 255 / calc(0.92 * var(--lg-edge-highlight))) 360deg);
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
@@ -121,16 +113,14 @@
 
 /* Official Apple Liquid Glass rim: uniform top & bottom horizon shine, fading on left/right sides */
 .lg-rim--apple {
-  background: linear-gradient(
-    180deg,
-    rgb(255 255 255 / calc(0.88 * var(--lg-edge-highlight))) 0%,
-    rgb(235 242 255 / calc(0.46 * var(--lg-edge-highlight))) 16%,
-    rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 34%,
-    rgb(255 255 255 / calc(0.02 * var(--lg-edge-highlight))) 50%,
-    rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 66%,
-    rgb(235 242 255 / calc(0.42 * var(--lg-edge-highlight))) 84%,
-    rgb(255 255 255 / calc(0.78 * var(--lg-edge-highlight))) 100%
-  );
+  background: linear-gradient(180deg,
+      rgb(255 255 255 / calc(0.88 * var(--lg-edge-highlight))) 0%,
+      rgb(235 242 255 / calc(0.46 * var(--lg-edge-highlight))) 16%,
+      rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 34%,
+      rgb(255 255 255 / calc(0.02 * var(--lg-edge-highlight))) 50%,
+      rgb(255 255 255 / calc(0.05 * var(--lg-edge-highlight))) 66%,
+      rgb(235 242 255 / calc(0.42 * var(--lg-edge-highlight))) 84%,
+      rgb(255 255 255 / calc(0.78 * var(--lg-edge-highlight))) 100%);
 }
 
 .lg-content {
