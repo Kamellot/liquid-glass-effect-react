@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
-import { getFilterStats, subscribeFilterStats, type FilterStats } from './glass'
+import { getFilterStats, subscribeFilterStats, type FilterStats, type SpecularMode } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
@@ -9,6 +9,7 @@ const SERVER_STATS: FilterStats = { filters: 0, consumers: 0, bitmaps: 0 }
 
 export default function App() {
   const [params, setParams] = useState<DemoParams>(DEFAULT_PARAMS)
+  const [specularMode, setSpecularMode] = useState<SpecularMode>('directional')
   const [panelOpen, setPanelOpen] = useState(
     () => typeof window !== 'undefined' && !window.matchMedia('(max-width: 860px)').matches,
   )
@@ -26,7 +27,8 @@ export default function App() {
       : 'CSS optical layer'
 
   const { size, ...optics } = params
-  const lens = { ...optics, size }
+  const lens = { ...optics, size, specularMode }
+  const dock = { ...optics, specularMode }
 
   return (
     <>
@@ -41,7 +43,7 @@ export default function App() {
         </header>
 
         <Hero lens={lens} />
-        <DockScene glass={optics} />
+        <DockScene glass={dock} />
 
         <footer className="foot">
           <p>
@@ -56,6 +58,8 @@ export default function App() {
       <ControlPanel
         params={params}
         onChange={patch}
+        specularMode={specularMode}
+        onSpecularMode={setSpecularMode}
         stats={statsLabel}
         open={panelOpen}
         onToggle={() => setPanelOpen((o) => !o)}

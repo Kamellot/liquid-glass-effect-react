@@ -22,9 +22,13 @@ export interface LiquidGlassOptions {
   glow?: number
   /** Specular light source azimuth in degrees (0 to 360). */
   specularAngle?: number
+  /** Specular shine style: rotating 'directional' conic/angled highlight or uniform top/bottom 'apple' rim. */
+  specularMode?: SpecularMode
 }
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
+
+export type SpecularMode = 'directional' | 'apple'
 
 export interface DisplacementMapInfo {
   filterId: string | null
@@ -60,4 +64,5 @@ export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size'>> = {
   edgeHighlight: 1.0,
   glow: 1.0,
   specularAngle: 71,
+  specularMode: 'directional',
 }

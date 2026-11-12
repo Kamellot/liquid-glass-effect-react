@@ -88,6 +88,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   edgeHighlight = DEFAULTS.edgeHighlight,
   glow = DEFAULTS.glow,
   specularAngle = DEFAULTS.specularAngle,
+  specularMode = DEFAULTS.specularMode,
   refractionTarget,
   children,
   className,
@@ -325,10 +326,10 @@ export const LiquidGlass = memo(function LiquidGlass({
     const sizeStyles: CSSProperties =
       explicitSize !== undefined
         ? {
-            width: explicitSize,
-            height: explicitSize,
-            borderRadius: '50%',
-          }
+          width: explicitSize,
+          height: explicitSize,
+          borderRadius: '50%',
+        }
         : {}
 
     return {
@@ -391,8 +392,18 @@ export const LiquidGlass = memo(function LiquidGlass({
 
       {showSeparateFrost && <div className="lg-frost" aria-hidden="true" />}
 
-      {glow > 0.001 && <div className="lg-glow" aria-hidden="true" />}
-      {edgeHighlight > 0.001 && <div className="lg-rim" aria-hidden="true" />}
+      {glow > 0.001 && (
+        <div
+          className={specularMode === 'apple' ? 'lg-glow lg-glow--apple' : 'lg-glow'}
+          aria-hidden="true"
+        />
+      )}
+      {edgeHighlight > 0.001 && (
+        <div
+          className={specularMode === 'apple' ? 'lg-rim lg-rim--apple' : 'lg-rim'}
+          aria-hidden="true"
+        />
+      )}
 
       {hasChildren && <div className="lg-content">{children}</div>}
     </div>

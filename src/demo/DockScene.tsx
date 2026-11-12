@@ -217,6 +217,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
                   glow={selected ? 1 : 0.6}
                   edgeHighlight={selected ? 1 : 0.65}
                   specularAngle={glass.specularAngle}
+                  specularMode={glass.specularMode}
                 >
                   <button
                     type="button"

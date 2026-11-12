@@ -674,6 +674,15 @@ button {
   gap: 14px;
   height: 33px;
   font-size: 14px;
+  transition: opacity 150ms ease;
+}
+
+.cp-row--dim {
+  opacity: 0.42;
+}
+
+.cp-row--dim input[type='range'] {
+  cursor: not-allowed;
 }
 
 .cp-row label {
@@ -751,6 +760,16 @@ button {
 .cp-foot b {
   color: #cfd0d8;
   font-weight: 500;
+}
+
+.cp-shine {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cp-foot-label {
+  margin-right: 2px;
 }
 
 .seg {
