@@ -12,12 +12,9 @@ import {
   acquireFilter,
   generateDisplacementMap,
   releaseFilter,
-  resolveRefractionPath,
+  supportsBackdropSvgFilter,
 } from './refractionEngine'
-import {
-  DEFAULTS,
-  type LiquidGlassProps,
-} from './types'
+import { DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
 
 interface BoxMetrics {
@@ -92,7 +89,6 @@ export const LiquidGlass = memo(function LiquidGlass({
   glow = DEFAULTS.glow,
   specularAngle = DEFAULTS.specularAngle,
   refractionTarget,
-  engine = 'auto',
   children,
   className,
   style,
@@ -112,12 +108,18 @@ export const LiquidGlass = memo(function LiquidGlass({
   const isStandalone = mode === 'wrapper' && !hasChildren
   const explicitSize = mode === 'wrapper' ? size : undefined
 
-  // Resolve target element ref after commit
+  // Resolve refractionTarget after commit
   useLayoutEffect(() => {
     setTargetEl(resolveTarget(refractionTarget))
   }, [refractionTarget])
 
-  const path = resolveRefractionPath(engine, Boolean(targetEl))
+  // Universal cross-browser target refraction when refractionTarget is present;
+  // otherwise native Chromium backdrop-filter SVG or pure CSS optics.
+  const path = targetEl
+    ? 'target-svg'
+    : supportsBackdropSvgFilter()
+      ? 'backdrop-svg'
+      : 'css-optics'
 
   // Track element dimensions and border-radius via ResizeObserver
   useLayoutEffect(() => {
@@ -202,7 +204,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
   }, [metrics, depth, curvature, splay, strength, chroma])
 
-  // Cross-browser target-layer refraction: clone target once & sync only (x, y) on drag/scroll
+  // Universal cross-browser target-layer refraction: clone target once & sync only (x, y) on drag/scroll
   useLayoutEffect(() => {
     if (path !== 'target-svg' || !targetEl) return
     const root = rootRef.current
@@ -246,7 +248,6 @@ export const LiquidGlass = memo(function LiquidGlass({
       if (!cloneRaf) cloneRaf = requestAnimationFrame(syncClone)
     }
 
-    // Observe root and target resize plus non-glass target content mutations
     const targetRo = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.target === targetEl) {
@@ -275,7 +276,6 @@ export const LiquidGlass = memo(function LiquidGlass({
       characterData: true,
     })
 
-    // Observe ancestor transforms/styles (and parent tint changes in layer mode)
     const ancestorMo = new MutationObserver((records) => {
       for (const rec of records) {
         if (rec.target === root.parentElement) {
@@ -290,6 +290,8 @@ export const LiquidGlass = memo(function LiquidGlass({
       cur = cur.parentElement
     }
 
+    const parentEl = root.parentElement
+    parentEl?.addEventListener('transitionend', syncParentTint)
     window.addEventListener('scroll', schedulePos, { passive: true, capture: true })
     window.addEventListener('resize', schedulePos, { passive: true })
 
@@ -299,13 +301,13 @@ export const LiquidGlass = memo(function LiquidGlass({
       targetRo.disconnect()
       targetMo.disconnect()
       ancestorMo.disconnect()
+      parentEl?.removeEventListener('transitionend', syncParentTint)
       window.removeEventListener('scroll', schedulePos, true)
       window.removeEventListener('resize', schedulePos)
       host.replaceChildren()
     }
   }, [path, targetEl, mode])
 
-  // Pure CSS optical variables derived from specularAngle, blur, edgeHighlight, glow
   const rootStyle = useMemo<CSSProperties>(() => {
     const rad = ((specularAngle - 90) * Math.PI) / 180
     const lx = Math.cos(rad)
@@ -336,7 +338,6 @@ export const LiquidGlass = memo(function LiquidGlass({
     } as CSSProperties
   }, [blur, edgeHighlight, specularAngle, glow, explicitSize, style])
 
-  // Compose Chromium backdrop-filter string cleanly (SVG refraction + optional CSS blur)
   const backdropStyle = useMemo<CSSProperties | undefined>(() => {
     if (path !== 'backdrop-svg' || !filterId) return undefined
     const filterValue =
@@ -397,4 +398,3 @@ export const LiquidGlass = memo(function LiquidGlass({
     </div>
   )
 })
-

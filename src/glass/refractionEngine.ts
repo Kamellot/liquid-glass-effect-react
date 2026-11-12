@@ -1,5 +1,3 @@
-import type { RefractionEngineMode, ResolvedRefractionPath } from './types'
-
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const MAX_BITMAP_CACHE = 64
 
@@ -500,18 +498,5 @@ export function supportsBackdropSvgFilter(): boolean {
 
   cachedBackdropSupport = !isIOS && !isFirefox && !isSafari && hasCssBackdrop
   return cachedBackdropSupport
-}
-
-export function resolveRefractionPath(
-  engine: RefractionEngineMode = 'auto',
-  hasRefractionTarget = false,
-): ResolvedRefractionPath {
-  if (engine === 'css') return 'css-optics'
-  if (engine === 'target') return hasRefractionTarget ? 'target-svg' : 'css-optics'
-  if (engine === 'backdrop') return supportsBackdropSvgFilter() ? 'backdrop-svg' : hasRefractionTarget ? 'target-svg' : 'css-optics'
-
-  if (supportsBackdropSvgFilter()) return 'backdrop-svg'
-  if (hasRefractionTarget) return 'target-svg'
-  return 'css-optics'
 }
 

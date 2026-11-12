@@ -474,7 +474,7 @@ button {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  transition: background-color 180ms ease, box-shadow 180ms ease;
+  transition: box-shadow 180ms ease;
 }
 
 .dock-material[data-tinted='true'] {
@@ -751,11 +751,6 @@ button {
 .cp-foot b {
   color: #cfd0d8;
   font-weight: 500;
-}
-
-.cp-engine {
-  display: inline-flex;
-  gap: 4px;
 }
 
 .seg {

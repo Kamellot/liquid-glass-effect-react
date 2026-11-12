@@ -1,13 +1,9 @@
 import { useCallback, useId } from 'react'
-import type { RefractionEngineMode, ResolvedRefractionPath } from '../glass'
 import { PRESETS, SLIDERS, type DemoParams, type SliderDef } from './presets'
 
 interface Props {
   params: DemoParams
   onChange: (patch: Partial<DemoParams>) => void
-  engine: RefractionEngineMode
-  onEngine: (e: RefractionEngineMode) => void
-  resolvedPath: ResolvedRefractionPath
   stats: string
   open: boolean
   onToggle: () => void
@@ -42,29 +38,7 @@ function SliderRow({
   )
 }
 
-const ENGINES: { id: RefractionEngineMode; label: string }[] = [
-  { id: 'auto', label: 'Auto' },
-  { id: 'backdrop', label: 'SVG Backdrop' },
-  { id: 'target', label: 'Target Filter' },
-  { id: 'css', label: 'CSS Optics' },
-]
-
-const PATH_LABELS: Record<ResolvedRefractionPath, string> = {
-  'backdrop-svg': 'backdrop-filter: url(#svg)',
-  'target-svg': 'filter: url(#svg) on target layer',
-  'css-optics': 'CSS optical layer only',
-}
-
-export function ControlPanel({
-  params,
-  onChange,
-  engine,
-  onEngine,
-  resolvedPath,
-  stats,
-  open,
-  onToggle,
-}: Props) {
+export function ControlPanel({ params, onChange, stats, open, onToggle }: Props) {
   const setParam = useCallback(
     (key: keyof DemoParams) => (val: number) => onChange({ [key]: val }),
     [onChange],
@@ -108,20 +82,8 @@ export function ControlPanel({
           </div>
 
           <div className="cp-foot">
-            <div className="cp-engine" role="group" aria-label="Refraction path">
-              {ENGINES.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={'seg' + (engine === item.id ? ' seg--on' : '')}
-                  onClick={() => onEngine(item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
             <span className="cp-stat">
-              path: <b>{PATH_LABELS[resolvedPath]}</b>
+              engine: <b>1/4 Quadrant SDF · Universal SVG Filter + CSS Optics</b>
             </span>
             <span className="cp-stat">{stats}</span>
           </div>
@@ -130,4 +92,3 @@ export function ControlPanel({
     </aside>
   )
 }
-

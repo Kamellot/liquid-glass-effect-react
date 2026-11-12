@@ -26,10 +26,6 @@ export interface LiquidGlassOptions {
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
 
-export type RefractionEngineMode = 'auto' | 'backdrop' | 'target' | 'css'
-
-export type ResolvedRefractionPath = 'backdrop-svg' | 'target-svg' | 'css-optics'
-
 export interface DisplacementMapInfo {
   filterId: string | null
   dataUrl: string | null
@@ -42,10 +38,8 @@ export interface DisplacementMapInfo {
 export interface LiquidGlassProps extends LiquidGlassOptions {
   /** Integration pattern: Apple Material 'layer' (default) or 'wrapper'. */
   mode?: LiquidGlassMode
-  /** Target layer element/ref for cross-browser SVG filter refraction (Chrome, Firefox, Safari). */
+  /** Target layer element/ref for universal cross-browser `filter: url(#svg-id)` refraction. */
   refractionTarget?: RefObject<HTMLElement | null> | HTMLElement | null
-  /** Refraction execution strategy; 'auto' picks native backdrop SVG on Chromium and target SVG on Safari/Firefox. */
-  engine?: RefractionEngineMode
   /** Optional children (used in 'wrapper' mode). */
   children?: ReactNode
   className?: string
@@ -67,4 +61,3 @@ export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size'>> = {
   glow: 1.0,
   specularAngle: 71,
 }
-

@@ -1,11 +1,5 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
-import {
-  getFilterStats,
-  resolveRefractionPath,
-  subscribeFilterStats,
-  type FilterStats,
-  type RefractionEngineMode,
-} from './glass'
+import { getFilterStats, subscribeFilterStats, type FilterStats } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
@@ -15,7 +9,6 @@ const SERVER_STATS: FilterStats = { filters: 0, consumers: 0, bitmaps: 0 }
 
 export default function App() {
   const [params, setParams] = useState<DemoParams>(DEFAULT_PARAMS)
-  const [engine, setEngine] = useState<RefractionEngineMode>('auto')
   const [panelOpen, setPanelOpen] = useState(
     () => typeof window !== 'undefined' && !window.matchMedia('(max-width: 860px)').matches,
   )
@@ -27,15 +20,13 @@ export default function App() {
     [],
   )
 
-  const resolvedPath = resolveRefractionPath(engine, true)
   const statsLabel =
     filterStats.consumers > 0
       ? `${filterStats.consumers} glass instances → ${filterStats.filters} <filter>${filterStats.filters === 1 ? '' : 's'} · ${filterStats.bitmaps} bitmap${filterStats.bitmaps === 1 ? '' : 's'}`
       : 'CSS optical layer'
 
   const { size, ...optics } = params
-  const lens = { ...optics, size, engine }
-  const dock = { ...optics, engine }
+  const lens = { ...optics, size }
 
   return (
     <>
@@ -45,12 +36,12 @@ export default function App() {
             <i className="brand-dot" /> liquid-glass<b>/react</b>
           </span>
           <span className="topbar-note">
-            1/4 Quadrant SDF · SVG Displacement Map + Pure CSS Optical Layer
+            1/4 Quadrant SDF · Universal SVG Displacement + Pure CSS Optics
           </span>
         </header>
 
         <Hero lens={lens} />
-        <DockScene glass={dock} />
+        <DockScene glass={optics} />
 
         <footer className="foot">
           <p>
@@ -65,9 +56,6 @@ export default function App() {
       <ControlPanel
         params={params}
         onChange={patch}
-        engine={engine}
-        onEngine={setEngine}
-        resolvedPath={resolvedPath}
         stats={statsLabel}
         open={panelOpen}
         onToggle={() => setPanelOpen((o) => !o)}

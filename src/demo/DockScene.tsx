@@ -210,7 +210,6 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
                   mode="wrapper"
                   className="seg-chip"
                   refractionTarget={sceneRef}
-                  engine={glass.engine}
                   strength={0.07}
                   depth={8}
                   blur={0}

@@ -5,7 +5,6 @@ export {
   generateDisplacementMap,
   getFilterStats,
   releaseFilter,
-  resolveRefractionPath,
   subscribeFilterStats,
   supportsBackdropSvgFilter,
   type AcquiredFilter,
@@ -20,7 +19,4 @@ export {
   type LiquidGlassMode,
   type LiquidGlassOptions,
   type LiquidGlassProps,
-  type RefractionEngineMode,
-  type ResolvedRefractionPath,
 } from './types'
-
