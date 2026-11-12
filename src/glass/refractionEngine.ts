@@ -1,4 +1,5 @@
 const SVG_NS = 'http://www.w3.org/2000/svg'
+const XLINK_NS = 'http://www.w3.org/1999/xlink'
 const MAX_BITMAP_CACHE = 64
 
 export interface DisplacementMapSpec {
@@ -40,6 +41,8 @@ let sharedDefs: SVGDefsElement | null = null
 let revisionCounter = 0
 
 const bitmapCache = new Map<string, string>()
+const decodedBitmaps = new Set<string>()
+const pendingDecodes = new Map<string, Promise<void>>()
 const activeFilters = new Map<string, ActiveFilterEntry>()
 const statListeners = new Set<() => void>()
 
@@ -261,6 +264,50 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   return dataUrl
 }
 
+export function isBitmapDecoded(dataUrl: string): boolean {
+  return decodedBitmaps.has(dataUrl) || typeof Image === 'undefined'
+}
+
+/**
+ * Ensures the generated PNG Data URL is decoded into the browser image cache
+ * before WebKit evaluates `<feImage>` inside `<filter>`.
+ */
+export function ensureBitmapDecoded(dataUrl: string): Promise<void> {
+  if (!dataUrl || isBitmapDecoded(dataUrl)) {
+    return Promise.resolve()
+  }
+  const existing = pendingDecodes.get(dataUrl)
+  if (existing) return existing
+
+  const promise = new Promise<void>((resolve) => {
+    const img = new Image()
+    const done = () => {
+      decodedBitmaps.add(dataUrl)
+      pendingDecodes.delete(dataUrl)
+      resolve()
+    }
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        img.decode().then(done, done)
+      } else {
+        done()
+      }
+    }
+    img.onerror = done
+    img.src = dataUrl
+    if (img.complete) {
+      if (typeof img.decode === 'function') {
+        img.decode().then(done, done)
+      } else {
+        done()
+      }
+    }
+  })
+
+  pendingDecodes.set(dataUrl, promise)
+  return promise
+}
+
 function ensureSharedDefs(): SVGDefsElement | null {
   if (typeof document === 'undefined') return null
   if (sharedDefs && sharedDefs.isConnected) return sharedDefs
@@ -268,9 +315,14 @@ function ensureSharedDefs(): SVGDefsElement | null {
   const svg = document.createElementNS(SVG_NS, 'svg')
   svg.setAttribute('aria-hidden', 'true')
   svg.setAttribute('data-lg-svg-defs', 'true')
+  svg.setAttribute('width', '1')
+  svg.setAttribute('height', '1')
   svg.style.position = 'fixed'
-  svg.style.width = '0'
-  svg.style.height = '0'
+  svg.style.left = '-2px'
+  svg.style.top = '-2px'
+  svg.style.width = '1px'
+  svg.style.height = '1px'
+  svg.style.opacity = '0.001'
   svg.style.overflow = 'hidden'
   svg.style.pointerEvents = 'none'
 
@@ -302,26 +354,26 @@ function createSvgFilterElement(
 ): SVGFilterElement {
   const filter = svgEl('filter', {
     id: filterId,
-    x: 0,
-    y: 0,
-    width,
-    height,
-    filterUnits: 'userSpaceOnUse',
+    x: '0%',
+    y: '0%',
+    width: '100%',
+    height: '100%',
+    filterUnits: 'objectBoundingBox',
     primitiveUnits: 'userSpaceOnUse',
     'color-interpolation-filters': 'sRGB',
   })
 
-  filter.appendChild(
-    svgEl('feImage', {
-      href: dataUrl,
-      x: 0,
-      y: 0,
-      width,
-      height,
-      preserveAspectRatio: 'none',
-      result: 'lgMap',
-    }),
-  )
+  const feImage = svgEl('feImage', {
+    href: dataUrl,
+    x: 0,
+    y: 0,
+    width,
+    height,
+    preserveAspectRatio: 'none',
+    result: 'lgMap',
+  })
+  feImage.setAttributeNS(XLINK_NS, 'xlink:href', dataUrl)
+  filter.appendChild(feImage)
 
   const baseScale = strength * Math.min(width, height) * 2
 

@@ -2,8 +2,10 @@ export { LiquidGlass } from './LiquidGlass'
 export {
   acquireFilter,
   buildFilterHash,
+  ensureBitmapDecoded,
   generateDisplacementMap,
   getFilterStats,
+  isBitmapDecoded,
   releaseFilter,
   subscribeFilterStats,
   supportsBackdropSvgFilter,

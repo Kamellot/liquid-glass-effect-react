@@ -10,7 +10,9 @@ import {
 } from 'react'
 import {
   acquireFilter,
+  ensureBitmapDecoded,
   generateDisplacementMap,
+  isBitmapDecoded,
   releaseFilter,
   supportsBackdropSvgFilter,
 } from './refractionEngine'
@@ -151,17 +153,18 @@ export const LiquidGlass = memo(function LiquidGlass({
       return
     }
 
-    if (strength <= 0.0001) {
+    const dataUrl = generateDisplacementMap({
+      width,
+      height,
+      borderRadius,
+      depth,
+      curvature,
+      splay,
+    })
+
+    if (strength <= 0.0001 || !dataUrl) {
       setFilterId(null)
       if (onMapUpdateRef.current) {
-        const dataUrl = generateDisplacementMap({
-          width,
-          height,
-          borderRadius,
-          depth,
-          curvature,
-          splay,
-        })
         onMapUpdateRef.current({
           filterId: null,
           dataUrl: dataUrl || null,
@@ -174,34 +177,55 @@ export const LiquidGlass = memo(function LiquidGlass({
       return
     }
 
-    const acquired = acquireFilter({
-      width,
-      height,
-      borderRadius,
-      depth,
-      curvature,
-      splay,
-      strength,
-      chroma,
-    })
+    let cancelled = false
+    let acquiredHash: string | null = null
 
-    if (!acquired) {
-      setFilterId(null)
-      return
+    const attach = () => {
+      if (cancelled) return
+      const acquired = acquireFilter({
+        width,
+        height,
+        borderRadius,
+        depth,
+        curvature,
+        splay,
+        strength,
+        chroma,
+      })
+      if (!acquired || cancelled) {
+        if (acquired) releaseFilter(acquired.hash)
+        return
+      }
+      acquiredHash = acquired.hash
+      setFilterId(acquired.filterId)
+      onMapUpdateRef.current?.({
+        filterId: acquired.filterId,
+        dataUrl: acquired.dataUrl,
+        width,
+        height,
+        borderRadius,
+        hash: acquired.hash,
+      })
     }
 
-    setFilterId(acquired.filterId)
-    onMapUpdateRef.current?.({
-      filterId: acquired.filterId,
-      dataUrl: acquired.dataUrl,
-      width,
-      height,
-      borderRadius,
-      hash: acquired.hash,
-    })
+    if (isBitmapDecoded(dataUrl)) {
+      attach()
+    } else {
+      // Emit preview immediately while awaiting PNG decode for WebKit <feImage>
+      onMapUpdateRef.current?.({
+        filterId: null,
+        dataUrl,
+        width,
+        height,
+        borderRadius,
+        hash: 'decoding',
+      })
+      void ensureBitmapDecoded(dataUrl).then(attach)
+    }
 
     return () => {
-      releaseFilter(acquired.hash)
+      cancelled = true
+      if (acquiredHash) releaseFilter(acquiredHash)
     }
   }, [metrics, depth, curvature, splay, strength, chroma])
 
@@ -226,7 +250,9 @@ export const LiquidGlass = memo(function LiquidGlass({
       const targetRect = targetEl.getBoundingClientRect()
       const dx = rootRect.left - targetRect.left
       const dy = rootRect.top - targetRect.top
-      host.style.transform = `translate3d(${-dx}px, ${-dy}px, 0)`
+      // 2D left/top keeps mirror inside the same software SVG filter pass on iOS WebKit
+      host.style.left = `${-dx}px`
+      host.style.top = `${-dy}px`
     }
 
     const syncParentTint = () => {
@@ -380,7 +406,16 @@ export const LiquidGlass = memo(function LiquidGlass({
         <div className="lg-target-clip" aria-hidden="true">
           <div
             className="lg-target-filter"
-            style={filterId ? { filter: `url(#${filterId})` } : undefined}
+            style={{
+              width: metrics.width || '100%',
+              height: metrics.height || '100%',
+              ...(filterId
+                ? {
+                    filter: `url(#${filterId})`,
+                    WebkitFilter: `url(#${filterId})`,
+                  }
+                : null),
+            }}
           >
             <div ref={mirrorHostRef} className="lg-target-mirror" />
           </div>

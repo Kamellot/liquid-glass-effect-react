@@ -32,7 +32,6 @@
 .lg-glow,
 .lg-rim,
 .lg-target-clip,
-.lg-target-filter,
 .lg-target-tint {
   position: absolute;
   inset: 0;
@@ -53,7 +52,15 @@
 }
 
 .lg-target-filter {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
   border-radius: 0;
+  pointer-events: none;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: filter;
 }
 
 .lg-target-mirror {
