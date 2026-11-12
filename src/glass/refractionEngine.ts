@@ -23,6 +23,7 @@ export interface BevelField {
   width: number
   height: number
   borderRadius: number
+  effectiveDepth: number
   scale: number
   bufWidth: number
   bufHeight: number
@@ -33,6 +34,7 @@ export interface BevelField {
   vecX: Float32Array
   vecY: Float32Array
   alpha: Uint8Array
+  softness: Uint8Array
 }
 
 export interface AcquiredBevel {
@@ -58,6 +60,7 @@ interface BevelSample {
   dy: number
   outerAlpha: number
   innerAlpha: number
+  softness: number
 }
 
 let sharedCanvas: HTMLCanvasElement | null = null
@@ -193,11 +196,13 @@ function makeBevelCurveParams(
   const bx = Math.max(0, hw - r)
   const by = Math.max(0, hh - r)
   const effectiveDepth = Math.max(1, Math.min(depth, Math.min(hw, hh)))
-  const splayExp = 3.2 - 2.35 * splay
-  const sinMax = 0.35 + 0.64 * curvature
+  // Cushioned C² sine-dome power controls bevel concentration without mid-ring S-inflection elbows
+  const splayExp = 3.8 - 1.4 * splay
+  // Keep peak incident sine bounded below total internal grazing so Snell refraction stays fluid without rim spikes
+  const sinMax = 0.25 + 0.58 * curvature
   const maxDelta = Math.asin(sinMax) - Math.asin(sinMax / 1.52)
   const tanMaxDelta = Math.tan(maxDelta)
-  const curvGain = curvature > 0 ? Math.pow(curvature, 0.65) : 0
+  const curvGain = curvature > 0 ? Math.pow(curvature, 0.7) : 0
   return { hw, hh, bx, by, r, effectiveDepth, splayExp, sinMax, tanMaxDelta, curvGain }
 }
 
@@ -220,9 +225,15 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
   if (distInward >= p.effectiveDepth) return null
 
   const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
-  const u = 1 - distInward / p.effectiveDepth
-  const innerAlpha = Math.min(1, u / 0.12)
-  const uSplayed = Math.pow(u, p.splayExp)
+  const u = clamp01(1 - distInward / p.effectiveDepth)
+  // C² sine-dome guarantees zero slope & zero curvature at u = 0 and smoothly cushions rim Snell growth
+  const uSplayed = Math.pow(Math.sin(u * Math.PI * 0.5), p.splayExp)
+  // Gentle feather across the inner entry zone where displacement < 2% avoids razor seams against sharp text
+  const tAlpha = clamp01(u / 0.16)
+  const innerAlpha = tAlpha * tAlpha * (3 - 2 * tAlpha)
+  // Optical softness eases in smoothly from 0 at u = 0 so high-contrast letter edges transition gently
+  const tSoft = clamp01(u / 0.35)
+  const softness = tSoft * tSoft * (3 - 2 * tSoft)
 
   const sinI = uSplayed * p.sinMax
   const delta = Math.asin(sinI) - Math.asin(sinI / 1.52)
@@ -247,6 +258,7 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
     dy: -ny * mag,
     outerAlpha,
     innerAlpha,
+    softness,
   }
 }
 
@@ -347,15 +359,17 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
   const vecX = new Float32Array(maxEntries)
   const vecY = new Float32Array(maxEntries)
   const alpha = new Uint8Array(maxEntries)
+  const softness = new Uint8Array(maxEntries)
 
   let count = 0
-  const push = (col: number, row: number, vx: number, vy: number, a: number) => {
+  const push = (col: number, row: number, vx: number, vy: number, a: number, s: number) => {
     indices[count] = row * bufWidth + col
     px[count] = col
     py[count] = row
     vecX[count] = vx
     vecY[count] = vy
     alpha[count] = a
+    softness[count] = s
     count++
   }
 
@@ -373,11 +387,12 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
       const aByte = Math.round(sample.outerAlpha * sample.innerAlpha * 255)
       if (aByte === 0) continue
 
+      const sByte = Math.round(sample.softness * 255)
       const { dx, dy } = sample
-      push(x, y, dx, dy, aByte)
-      if (mx !== x) push(mx, y, -dx, dy, aByte)
-      if (my !== y) push(x, my, dx, -dy, aByte)
-      if (mx !== x && my !== y) push(mx, my, -dx, -dy, aByte)
+      push(x, y, dx, dy, aByte, sByte)
+      if (mx !== x) push(mx, y, -dx, dy, aByte, sByte)
+      if (my !== y) push(x, my, dx, -dy, aByte, sByte)
+      if (mx !== x && my !== y) push(mx, my, -dx, -dy, aByte, sByte)
     }
   }
 
@@ -387,6 +402,7 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
     width: w,
     height: h,
     borderRadius: r,
+    effectiveDepth: curve.effectiveDepth,
     scale,
     bufWidth,
     bufHeight,
@@ -397,6 +413,7 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
     vecX: vecX.subarray(0, count),
     vecY: vecY.subarray(0, count),
     alpha: alpha.subarray(0, count),
+    softness: softness.subarray(0, count),
   }
 }
 
@@ -479,7 +496,10 @@ export function renderRefractedBevel(
   const out32 = new Uint32Array(outData.buffer)
   out32.fill(0)
 
-  const dispCssPx = clamp(strength, 0, 0.2) * Math.min(field.width, field.height)
+  const rawDisp = clamp(strength, 0, 0.2) * Math.min(field.width, field.height) * 0.75
+  // Asymptotic soft knee prevents radial stalling / caustic folds at high strength relative to bevel depth
+  const maxSafe = field.effectiveDepth * 0.45 + 2
+  const dispCssPx = rawDisp <= maxSafe ? rawDisp : maxSafe + (rawDisp - maxSafe) * 0.08
   if (dispCssPx <= 0.001 || field.count === 0) {
     ctx.putImageData(outImageData, 0, 0)
     return
@@ -495,41 +515,72 @@ export function renderRefractedBevel(
   const baseOffsetSx = offsetX * srcScale - 0.5
   const baseOffsetSy = offsetY * srcScale - 0.5
 
-  const { count, indices, px, py, vecX, vecY, alpha } = field
+  const peakSoftCss =
+    Math.min(1, dispCssPx / 3.0) * Math.min(1.05, 0.35 + 0.55 * (dispCssPx / Math.max(4, field.effectiveDepth)))
+  const softStepBuf = (peakSoftCss * srcScale) / 255
+  const softMinBuf = 0.08 * srcScale
+
+  const { count, indices, px, py, vecX, vecY, alpha, softness } = field
   const spread = clamp01(chroma) * 0.18
   const useChroma = spread > 0.0005
+
+  const accum = new Float64Array(4)
+  const accumBilinearRgba = (sx: number, sy: number) => {
+    const cx = sx < 0 ? 0 : sx > maxX ? maxX : sx
+    const cy = sy < 0 ? 0 : sy > maxY ? maxY : sy
+    const x0 = cx | 0
+    const y0 = cy | 0
+    const x1 = x0 < maxX ? x0 + 1 : x0
+    const y1 = y0 < maxY ? y0 + 1 : y0
+    const fx = cx - x0
+    const fy = cy - y0
+    const w00 = (1 - fx) * (1 - fy)
+    const w10 = fx * (1 - fy)
+    const w01 = (1 - fx) * fy
+    const w11 = fx * fy
+    const row0 = y0 * srcW
+    const row1 = y1 * srcW
+    const i00 = (row0 + x0) * 4
+    const i10 = (row0 + x1) * 4
+    const i01 = (row1 + x0) * 4
+    const i11 = (row1 + x1) * 4
+    accum[0] += srcData[i00] * w00 + srcData[i10] * w10 + srcData[i01] * w01 + srcData[i11] * w11
+    accum[1] += srcData[i00 + 1] * w00 + srcData[i10 + 1] * w10 + srcData[i01 + 1] * w01 + srcData[i11 + 1] * w11
+    accum[2] += srcData[i00 + 2] * w00 + srcData[i10 + 2] * w10 + srcData[i01 + 2] * w01 + srcData[i11 + 2] * w11
+    accum[3] += srcData[i00 + 3] * w00 + srcData[i10 + 3] * w10 + srcData[i01 + 3] * w01 + srcData[i11 + 3] * w11
+  }
 
   if (!useChroma) {
     for (let i = 0; i < count; i++) {
       const sx = baseOffsetSx + (px[i] + 0.5) * ratio + vecX[i] * dispBufScale
       const sy = baseOffsetSy + (py[i] + 0.5) * ratio + vecY[i] * dispBufScale
-
-      const cx = sx < 0 ? 0 : sx > maxX ? maxX : sx
-      const cy = sy < 0 ? 0 : sy > maxY ? maxY : sy
-      const x0 = cx | 0
-      const y0 = cy | 0
-      const x1 = x0 < maxX ? x0 + 1 : x0
-      const y1 = y0 < maxY ? y0 + 1 : y0
-      const fx = cx - x0
-      const fy = cy - y0
-      const w00 = (1 - fx) * (1 - fy)
-      const w10 = fx * (1 - fy)
-      const w01 = (1 - fx) * fy
-      const w11 = fx * fy
-
-      const row0 = y0 * srcW
-      const row1 = y1 * srcW
-      const i00 = (row0 + x0) * 4
-      const i10 = (row0 + x1) * 4
-      const i01 = (row1 + x0) * 4
-      const i11 = (row1 + x1) * 4
-
       const dst = indices[i] * 4
-      outData[dst] = srcData[i00] * w00 + srcData[i10] * w10 + srcData[i01] * w01 + srcData[i11] * w11
-      outData[dst + 1] = srcData[i00 + 1] * w00 + srcData[i10 + 1] * w10 + srcData[i01 + 1] * w01 + srcData[i11 + 1] * w11
-      outData[dst + 2] = srcData[i00 + 2] * w00 + srcData[i10 + 2] * w10 + srcData[i01 + 2] * w01 + srcData[i11 + 2] * w11
-      const sA = srcData[i00 + 3] * w00 + srcData[i10 + 3] * w10 + srcData[i01 + 3] * w01 + srcData[i11 + 3] * w11
-      outData[dst + 3] = (alpha[i] * sA) / 255
+      const aByte = alpha[i]
+      const blurBuf = softness[i] * softStepBuf
+
+      accum[0] = 0
+      accum[1] = 0
+      accum[2] = 0
+      accum[3] = 0
+
+      if (blurBuf <= softMinBuf) {
+        accumBilinearRgba(sx, sy)
+        outData[dst] = accum[0]
+        outData[dst + 1] = accum[1]
+        outData[dst + 2] = accum[2]
+        outData[dst + 3] = (aByte * accum[3]) / 255
+      } else {
+        // Symmetric 4-tap rotated optical softness prevents jagged binary edges on crisp display text
+        const d = blurBuf * 0.7071
+        accumBilinearRgba(sx + d, sy + d)
+        accumBilinearRgba(sx - d, sy - d)
+        accumBilinearRgba(sx + d, sy - d)
+        accumBilinearRgba(sx - d, sy + d)
+        outData[dst] = accum[0] * 0.25
+        outData[dst + 1] = accum[1] * 0.25
+        outData[dst + 2] = accum[2] * 0.25
+        outData[dst + 3] = (aByte * accum[3] * 0.25) / 255
+      }
     }
   } else {
     const rMult = 1 - spread
@@ -549,11 +600,24 @@ export function renderRefractedBevel(
       const syB = by + dy * bMult
 
       const dst = indices[i] * 4
-      outData[dst] = sampleChannel(srcData, srcW, maxX, maxY, sxR, syR, 0)
-      outData[dst + 1] = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 1)
-      outData[dst + 2] = sampleChannel(srcData, srcW, maxX, maxY, sxB, syB, 2)
-      const sA = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 3)
-      outData[dst + 3] = (alpha[i] * sA) / 255
+      const blurBuf = softness[i] * softStepBuf
+      if (blurBuf <= softMinBuf) {
+        outData[dst] = sampleChannel(srcData, srcW, maxX, maxY, sxR, syR, 0)
+        outData[dst + 1] = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 1)
+        outData[dst + 2] = sampleChannel(srcData, srcW, maxX, maxY, sxB, syB, 2)
+        const sA = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 3)
+        outData[dst + 3] = (alpha[i] * sA) / 255
+      } else {
+        const dLen = Math.hypot(dx, dy)
+        const perp = blurBuf * 0.7
+        const tx = dLen > 1e-5 ? (-dy / dLen) * perp : perp
+        const ty = dLen > 1e-5 ? (dx / dLen) * perp : 0
+        outData[dst] = 0.5 * (sampleChannel(srcData, srcW, maxX, maxY, sxR + tx, syR + ty, 0) + sampleChannel(srcData, srcW, maxX, maxY, sxR - tx, syR - ty, 0))
+        outData[dst + 1] = 0.5 * (sampleChannel(srcData, srcW, maxX, maxY, sxG + tx, syG + ty, 1) + sampleChannel(srcData, srcW, maxX, maxY, sxG - tx, syG - ty, 1))
+        outData[dst + 2] = 0.5 * (sampleChannel(srcData, srcW, maxX, maxY, sxB + tx, syB + ty, 2) + sampleChannel(srcData, srcW, maxX, maxY, sxB - tx, syB - ty, 2))
+        const sA = 0.5 * (sampleChannel(srcData, srcW, maxX, maxY, sxG + tx, syG + ty, 3) + sampleChannel(srcData, srcW, maxX, maxY, sxG - tx, syG - ty, 3))
+        outData[dst + 3] = (alpha[i] * sA) / 255
+      }
     }
   }
 

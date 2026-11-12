@@ -561,7 +561,6 @@ function renderTextNode(
   ctx.save()
   ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
   ctx.fillStyle = cs.color
-  ctx.textBaseline = 'middle'
   ctx.textAlign = 'left'
 
   if ('letterSpacing' in ctx) {
@@ -569,67 +568,96 @@ function renderTextNode(
       cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing
   }
 
+  // Match DOM inline baseline via font metrics so large display letters match Canvas2D sub-pixel Y
+  const probe = typeof ctx.measureText === 'function' ? ctx.measureText('Mg') : null
+  const fontAscent = probe?.fontBoundingBoxAscent
+  const fontDescent = probe?.fontBoundingBoxDescent
+  const hasFontMetrics =
+    typeof fontAscent === 'number' &&
+    typeof fontDescent === 'number' &&
+    Number.isFinite(fontAscent) &&
+    Number.isFinite(fontDescent) &&
+    fontAscent + fontDescent > 0
+  ctx.textBaseline = hasFontMetrics ? 'alphabetic' : 'middle'
+  const baselineRatio = hasFontMetrics ? fontAscent / (fontAscent + fontDescent) : 0.52
+
   const shadow = parseTextShadow(cs.textShadow)
-  if (shadow) {
-    ctx.shadowColor = shadow.color
-    ctx.shadowOffsetX = shadow.x
-    ctx.shadowOffsetY = shadow.y
-    ctx.shadowBlur = shadow.blur
-  }
-
-  if (rects.length === 1) {
-    const r = rects[0]
-    const clean = applyTextTransform(trimmedMatch[0].replace(/\s+/g, ' '), cs.textTransform)
-    if (clean) {
-      ctx.fillText(clean, r.left - targetRect.left, r.top - targetRect.top + r.height * 0.52)
-    }
-    ctx.restore()
-    return
-  }
-
-  // Multi-line wrapped text: split by word boundaries using Range bounding boxes
   const words: { start: number; end: number }[] = []
   const re = /\S+/g
   let m: RegExpExecArray | null
   while ((m = re.exec(raw)) !== null) {
     words.push({ start: m.index, end: m.index + m[0].length })
   }
+  if (!words.length) {
+    ctx.restore()
+    return
+  }
 
-  let wi = 0
-  while (wi < words.length) {
-    range.setStart(node, words[wi].start)
-    range.setEnd(node, words[wi].end)
-    const firstRect = range.getBoundingClientRect()
-    const lineTop = firstRect.top
+  // Position every word (and divergent-tracking Latin glyphs) at exact DOM Range coordinates
+  const draws: { text: string; x: number; y: number }[] = []
+  for (let wi = 0; wi < words.length; wi++) {
+    const word = words[wi]
+    const rawWord = raw.slice(word.start, word.end)
+    const wordText = applyTextTransform(rawWord, cs.textTransform)
+    if (!wordText) continue
 
-    // Binary search last word belonging to the same visual line
-    let lo = wi
-    let hi = words.length - 1
-    let lastInLine = wi
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1
-      range.setStart(node, words[mid].start)
-      range.setEnd(node, words[mid].end)
-      const mr = range.getBoundingClientRect()
-      if (Math.abs(mr.top - lineTop) <= Math.max(4, firstRect.height * 0.45)) {
-        lastInLine = mid
-        lo = mid + 1
-      } else {
-        hi = mid - 1
+    range.setStart(node, word.start)
+    range.setEnd(node, word.end)
+    const wordRects = range.getClientRects()
+    const wordBox = wordRects.length === 1 ? wordRects[0] : range.getBoundingClientRect()
+    if (wordBox.width <= 0 || wordBox.height <= 0) continue
+
+    const measuredW = probe ? ctx.measureText(wordText).width : wordBox.width
+    const trackingDiverges = Number.isFinite(measuredW) && Math.abs(measuredW - wordBox.width) > 0.6
+    const canPerGlyph =
+      wordText.length > 1 &&
+      wordText.length === rawWord.length &&
+      (wordRects.length > 1 || trackingDiverges) &&
+      /^[\x21-\x7E\u00C0-\u024F\u2013\u2014]+$/.test(wordText)
+
+    if (canPerGlyph) {
+      for (let ci = 0; ci < wordText.length; ci++) {
+        range.setStart(node, word.start + ci)
+        range.setEnd(node, word.start + ci + 1)
+        const charBox = range.getBoundingClientRect()
+        if (charBox.width <= 0 || charBox.height <= 0) continue
+        draws.push({
+          text: wordText[ci],
+          x: charBox.left - targetRect.left,
+          y: charBox.top - targetRect.top + charBox.height * baselineRatio,
+        })
       }
+    } else {
+      draws.push({
+        text: wordText,
+        x: wordBox.left - targetRect.left,
+        y: wordBox.top - targetRect.top + wordBox.height * baselineRatio,
+      })
     }
+  }
 
-    range.setStart(node, words[wi].start)
-    range.setEnd(node, words[lastInLine].end)
-    const lineBox = range.getBoundingClientRect()
-    const lineText = applyTextTransform(
-      raw.slice(words[wi].start, words[lastInLine].end).replace(/\s+/g, ' ').trim(),
-      cs.textTransform,
-    )
-    if (lineText) {
-      ctx.fillText(lineText, lineBox.left - targetRect.left, lineBox.top - targetRect.top + lineBox.height * 0.52)
+  if (shadow) {
+    ctx.shadowColor = shadow.color
+    ctx.shadowOffsetX = shadow.x
+    ctx.shadowOffsetY = shadow.y
+    ctx.shadowBlur = shadow.blur
+  }
+  for (let i = 0; i < draws.length; i++) {
+    const d = draws[i]
+    ctx.fillText(d.text, d.x, d.y)
+  }
+
+  // Re-stamp opaque fills over shadow pass so neighboring tight-kerned glyphs don't darken each other
+  const isOpaqueText = !/rgba\([^,]+,[^,]+,[^,]+,\s*0\.\d+\)|\/\s*0\.\d+\s*\)/i.test(cs.color)
+  if (shadow && isOpaqueText && draws.length > 1) {
+    ctx.shadowColor = 'transparent'
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
+    ctx.shadowBlur = 0
+    for (let i = 0; i < draws.length; i++) {
+      const d = draws[i]
+      ctx.fillText(d.text, d.x, d.y)
     }
-    wi = lastInLine + 1
   }
 
   ctx.restore()
