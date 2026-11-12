@@ -124,7 +124,7 @@ const SHINE_MODES: {id: SpecularMode; label: string }[] = [
                 ))}
               </div>
               <span className="cp-stat">
-                engine: <b>1/4 Quadrant SDF · Universal SVG + CSS Optics</b>
+                engine: <b>Custom 1/4-SDF Canvas + CSS Optics</b>
               </span>
               <span className="cp-stat">{stats}</span>
             </div>

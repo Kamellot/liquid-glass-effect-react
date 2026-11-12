@@ -1,6 +1,8 @@
-const SVG_NS = 'http://www.w3.org/2000/svg'
-const XLINK_NS = 'http://www.w3.org/1999/xlink'
+import type { TargetSnapshot } from './domSnapshot'
+import { getSnapshotCount, subscribeSnapshotStats } from './domSnapshot'
+
 const MAX_BITMAP_CACHE = 64
+const MAX_BEVEL_BUDGET = 72_000
 
 export interface DisplacementMapSpec {
   width: number
@@ -11,42 +13,63 @@ export interface DisplacementMapSpec {
   splay: number
 }
 
-export interface FilterSpec extends DisplacementMapSpec {
-  strength: number
-  chroma: number
+export interface BevelSpec extends DisplacementMapSpec {
+  scale: number
 }
 
-export interface AcquiredFilter {
-  filterId: string
-  dataUrl: string
+export interface BevelField {
+  fieldId: string
   hash: string
+  width: number
+  height: number
+  borderRadius: number
+  scale: number
+  bufWidth: number
+  bufHeight: number
+  count: number
+  indices: Uint32Array
+  px: Uint16Array
+  py: Uint16Array
+  vecX: Float32Array
+  vecY: Float32Array
+  alpha: Uint8Array
 }
 
-export interface FilterStats {
-  filters: number
+export interface AcquiredBevel {
+  field: BevelField
+  dataUrl: string
+}
+
+export interface EngineStats {
+  fields: number
   consumers: number
   bitmaps: number
+  snapshots: number
 }
 
-interface ActiveFilterEntry {
-  filterId: string
+interface ActiveBevelEntry {
+  field: BevelField
   dataUrl: string
-  node: SVGFilterElement
   refCount: number
+}
+
+interface BevelSample {
+  dx: number
+  dy: number
+  outerAlpha: number
+  innerAlpha: number
 }
 
 let sharedCanvas: HTMLCanvasElement | null = null
 let sharedCtx: CanvasRenderingContext2D | null = null
-let sharedDefs: SVGDefsElement | null = null
 let revisionCounter = 0
 
 const bitmapCache = new Map<string, string>()
-const decodedBitmaps = new Set<string>()
-const pendingDecodes = new Map<string, Promise<void>>()
-const activeFilters = new Map<string, ActiveFilterEntry>()
+const activeBevels = new Map<string, ActiveBevelEntry>()
 const statListeners = new Set<() => void>()
 
-let cachedStats: FilterStats = { filters: 0, consumers: 0, bitmaps: 0 }
+let cachedStats: EngineStats = { fields: 0, consumers: 0, bitmaps: 0, snapshots: 0 }
+let snapshotUnsub: (() => void) | null = null
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v
@@ -58,27 +81,35 @@ function clamp01(v: number): number {
 
 function notifyStats(): void {
   let consumers = 0
-  for (const entry of activeFilters.values()) {
+  for (const entry of activeBevels.values()) {
     consumers += entry.refCount
   }
   cachedStats = {
-    filters: activeFilters.size,
+    fields: activeBevels.size,
     consumers,
     bitmaps: bitmapCache.size,
+    snapshots: getSnapshotCount(),
   }
   for (const listener of statListeners) {
     listener()
   }
 }
 
-export function getFilterStats(): FilterStats {
+export function getEngineStats(): EngineStats {
   return cachedStats
 }
 
-export function subscribeFilterStats(listener: () => void): () => void {
+export function subscribeEngineStats(listener: () => void): () => void {
+  if (!snapshotUnsub) {
+    snapshotUnsub = subscribeSnapshotStats(notifyStats)
+  }
   statListeners.add(listener)
   return () => {
     statListeners.delete(listener)
+    if (statListeners.size === 0 && snapshotUnsub) {
+      snapshotUnsub()
+      snapshotUnsub = null
+    }
   }
 }
 
@@ -117,24 +148,113 @@ function normalizeMapSpec(spec: DisplacementMapSpec): {
   return { w, h, r, depth, curvature, splay, key }
 }
 
-export function buildFilterHash(spec: FilterSpec): string {
-  const mapNorm = normalizeMapSpec(spec)
-  const strength = clamp(spec.strength, 0, 0.2)
-  const chroma = clamp01(spec.chroma)
-  return `${mapNorm.key}_st${strength.toFixed(4)}_ch${chroma.toFixed(3)}`
+export function buildBevelHash(spec: BevelSpec): string {
+  const norm = normalizeMapSpec(spec)
+  const scale = clamp(spec.scale, 1, 2)
+  return `${norm.key}_sc${scale.toFixed(2)}`
+}
+
+export function chooseRenderScale(width: number, height: number, depth: number): number {
+  const maxDpr = typeof window !== 'undefined' ? clamp(window.devicePixelRatio || 1, 1, 2) : 1
+  const effectiveDepth = clamp(depth, 1, Math.min(width, height) * 0.5)
+  const approxBevelPx = Math.min(width * height, 2 * (width + height) * effectiveDepth)
+  const bounded = Math.sqrt(MAX_BEVEL_BUDGET / Math.max(1, approxBevelPx))
+  const raw = clamp(bounded, 1, maxDpr)
+  return Math.round(raw * 4) / 4
+}
+
+interface BevelCurveParams {
+  hw: number
+  hh: number
+  bx: number
+  by: number
+  r: number
+  effectiveDepth: number
+  splayExp: number
+  sinMax: number
+  tanMaxDelta: number
+  curvGain: number
+}
+
+function makeBevelCurveParams(
+  w: number,
+  h: number,
+  r: number,
+  depth: number,
+  curvature: number,
+  splay: number,
+): BevelCurveParams {
+  const hw = w * 0.5
+  const hh = h * 0.5
+  const bx = Math.max(0, hw - r)
+  const by = Math.max(0, hh - r)
+  const effectiveDepth = Math.max(1, Math.min(depth, Math.min(hw, hh)))
+  const splayExp = 3.2 - 2.35 * splay
+  const sinMax = 0.35 + 0.64 * curvature
+  const maxDelta = Math.asin(sinMax) - Math.asin(sinMax / 1.52)
+  const tanMaxDelta = Math.tan(maxDelta)
+  const curvGain = curvature > 0 ? Math.pow(curvature, 0.65) : 0
+  return { hw, hh, bx, by, r, effectiveDepth, splayExp, sinMax, tanMaxDelta, curvGain }
 }
 
 /**
- * Computes an R/G displacement bitmap via exact rounded-rectangle SDF + Snell's law bevel optics.
- * Uses 1/4 quadrant symmetry: evaluates ONLY the top-left quadrant and mirrors across X and Y axes.
- * Neutral (no shift) is encoded as R=128, G=128.
+ * Shared 1/4-quadrant SDF + Snell's law bevel kernel.
+ * Evaluates a point `(cx >= 0, cy >= 0)` relative to center in top-left quadrant coordinates.
+ */
+function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSample | null {
+  if (p.curvGain <= 0) return null
+
+  const qx = cx - p.bx
+  const qy = cy - p.by
+  const ox = qx > 0 ? qx : 0
+  const oy = qy > 0 ? qy : 0
+  const outLen = Math.hypot(ox, oy)
+  const sd = outLen + Math.min(Math.max(qx, qy), 0) - p.r
+
+  if (sd > 0.75) return null
+  const distInward = sd < 0 ? -sd : 0
+  if (distInward >= p.effectiveDepth) return null
+
+  const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
+  const u = 1 - distInward / p.effectiveDepth
+  const innerAlpha = Math.min(1, u / 0.12)
+  const uSplayed = Math.pow(u, p.splayExp)
+
+  const sinI = uSplayed * p.sinMax
+  const delta = Math.asin(sinI) - Math.asin(sinI / 1.52)
+  const mag = (Math.tan(delta) / p.tanMaxDelta) * p.curvGain * outerAlpha
+
+  let nx = 0
+  let ny = 0
+  if (outLen > 1e-6) {
+    nx = -ox / outLen
+    ny = -oy / outLen
+  } else if (qx > qy) {
+    nx = -1
+  } else if (qy > qx) {
+    ny = -1
+  } else {
+    nx = -Math.SQRT1_2
+    ny = -Math.SQRT1_2
+  }
+
+  return {
+    dx: -nx * mag,
+    dy: -ny * mag,
+    outerAlpha,
+    innerAlpha,
+  }
+}
+
+/**
+ * Computes an R/G displacement debug bitmap via 1/4-quadrant symmetric rounded-rectangle SDF
+ * and mirrors pixels into all four quadrants (R = ΔX, G = ΔY, 128 = neutral).
  */
 export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   const { w, h, r, depth, curvature, splay, key } = normalizeMapSpec(spec)
 
   const cached = bitmapCache.get(key)
   if (cached) {
-    // Refresh LRU order
     bitmapCache.delete(key)
     bitmapCache.set(key, cached)
     return cached
@@ -146,84 +266,24 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   const { canvas, ctx } = surface
   const imageData = ctx.createImageData(w, h)
   const data = imageData.data
-
-  const hw = w * 0.5
-  const hh = h * 0.5
-  const bx = Math.max(0, hw - r)
-  const by = Math.max(0, hh - r)
-  const effectiveDepth = Math.max(1, Math.min(depth, Math.min(hw, hh)))
-
-  // Precompute bevel curve parameters outside the pixel loop
-  const splayExp = 3.2 - 2.35 * splay
-  const sinMax = 0.35 + 0.64 * curvature
-  const maxDelta = Math.asin(sinMax) - Math.asin(sinMax / 1.52)
-  const tanMaxDelta = Math.tan(maxDelta)
-  const curvGain = curvature > 0 ? Math.pow(curvature, 0.65) : 0
+  const curve = makeBevelCurveParams(w, h, r, depth, curvature, splay)
 
   const qW = Math.ceil(w * 0.5)
   const qH = Math.ceil(h * 0.5)
 
   for (let y = 0; y < qH; y++) {
-    const py = y + 0.5
-    const cy = hh - py
+    const cy = curve.hh - (y + 0.5)
     const my = h - 1 - y
     const rowTop = y * w
     const rowBot = my * w
 
     for (let x = 0; x < qW; x++) {
-      const px = x + 0.5
-      const cx = hw - px
+      const cx = curve.hw - (x + 0.5)
       const mx = w - 1 - x
 
-      // Exact Inigo Quilez rounded-box SDF in top-left quadrant (cx >= 0, cy >= 0)
-      const qx = cx - bx
-      const qy = cy - by
-      const ox = qx > 0 ? qx : 0
-      const oy = qy > 0 ? qy : 0
-      const outLen = Math.hypot(ox, oy)
-      const sd = outLen + Math.min(Math.max(qx, qy), 0) - r
-
-      let rVal = 128
-      let gVal = 128
-
-      // Active bevel band: subpixel outer boundary (-0.75..0) through effectiveDepth inward
-      if (sd <= 0.75 && curvGain > 0) {
-        const distInward = sd < 0 ? -sd : 0
-        if (distInward < effectiveDepth) {
-          // Smooth anti-aliased falloff across subpixel border [0..0.75] outside edge
-          const edgeAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
-          const u = 1 - distInward / effectiveDepth
-          const uSplayed = Math.pow(u, splayExp)
-
-          const sinI = uSplayed * sinMax
-          const delta = Math.asin(sinI) - Math.asin(sinI / 1.52)
-          const mag = (Math.tan(delta) / tanMaxDelta) * curvGain * edgeAlpha
-
-          // Outward unit normal in screen coordinates (top-left quadrant has nx <= 0, ny <= 0)
-          let nx = 0
-          let ny = 0
-          if (outLen > 1e-6) {
-            nx = -ox / outLen
-            ny = -oy / outLen
-          } else if (qx > qy) {
-            nx = -1
-          } else if (qy > qx) {
-            ny = -1
-          } else {
-            nx = -Math.SQRT1_2
-            ny = -Math.SQRT1_2
-          }
-
-          // Convex glass bends rays inward toward the thicker center (dx = -nx * mag >= 0)
-          const dx = -nx * mag
-          const dy = -ny * mag
-
-          rVal = Math.round(128 + dx * 127)
-          gVal = Math.round(128 + dy * 127)
-        }
-      }
-
-      // Mirror across X and Y axes into all 4 quadrants; neutral = 128 -> 256 - 128 = 128
+      const sample = evalTopLeftBevel(cx, cy, curve)
+      const rVal = sample ? Math.round(128 + sample.dx * 127) : 128
+      const gVal = sample ? Math.round(128 + sample.dy * 127) : 128
       const rMir = 256 - rVal
       const gMir = 256 - gVal
 
@@ -264,291 +324,234 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   return dataUrl
 }
 
-export function isBitmapDecoded(dataUrl: string): boolean {
-  return decodedBitmaps.has(dataUrl) || typeof Image === 'undefined'
-}
+function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelField {
+  const { w, h, r, depth, curvature, splay } = normalizeMapSpec(spec)
+  const scale = clamp(spec.scale, 1, 2)
+  const bufWidth = Math.max(2, Math.round(w * scale))
+  const bufHeight = Math.max(2, Math.round(h * scale))
+  const curve = makeBevelCurveParams(w, h, r, depth, curvature, splay)
 
-/**
- * Ensures the generated PNG Data URL is decoded into the browser image cache
- * before WebKit evaluates `<feImage>` inside `<filter>`.
- */
-export function ensureBitmapDecoded(dataUrl: string): Promise<void> {
-  if (!dataUrl || isBitmapDecoded(dataUrl)) {
-    return Promise.resolve()
-  }
-  const existing = pendingDecodes.get(dataUrl)
-  if (existing) return existing
+  const qW = Math.ceil(bufWidth * 0.5)
+  const qH = Math.ceil(bufHeight * 0.5)
+  const invScale = 1 / scale
 
-  const promise = new Promise<void>((resolve) => {
-    const img = new Image()
-    const done = () => {
-      decodedBitmaps.add(dataUrl)
-      pendingDecodes.delete(dataUrl)
-      resolve()
-    }
-    img.onload = () => {
-      if (typeof img.decode === 'function') {
-        img.decode().then(done, done)
-      } else {
-        done()
-      }
-    }
-    img.onerror = done
-    img.src = dataUrl
-    if (img.complete) {
-      if (typeof img.decode === 'function') {
-        img.decode().then(done, done)
-      } else {
-        done()
-      }
-    }
-  })
+  // Upper bound capacity: worst case bevel covers all buffer pixels
+  const maxEntries = bufWidth * bufHeight
+  const indices = new Uint32Array(maxEntries)
+  const px = new Uint16Array(maxEntries)
+  const py = new Uint16Array(maxEntries)
+  const vecX = new Float32Array(maxEntries)
+  const vecY = new Float32Array(maxEntries)
+  const alpha = new Uint8Array(maxEntries)
 
-  pendingDecodes.set(dataUrl, promise)
-  return promise
-}
-
-function ensureSharedDefs(): SVGDefsElement | null {
-  if (typeof document === 'undefined') return null
-  if (sharedDefs && sharedDefs.isConnected) return sharedDefs
-
-  const svg = document.createElementNS(SVG_NS, 'svg')
-  svg.setAttribute('aria-hidden', 'true')
-  svg.setAttribute('data-lg-svg-defs', 'true')
-  svg.setAttribute('width', '1')
-  svg.setAttribute('height', '1')
-  svg.style.position = 'fixed'
-  svg.style.left = '-2px'
-  svg.style.top = '-2px'
-  svg.style.width = '1px'
-  svg.style.height = '1px'
-  svg.style.opacity = '0.001'
-  svg.style.overflow = 'hidden'
-  svg.style.pointerEvents = 'none'
-
-  const defs = document.createElementNS(SVG_NS, 'defs')
-  svg.appendChild(defs)
-  document.body.appendChild(svg)
-  sharedDefs = defs
-  return defs
-}
-
-function svgEl<K extends keyof SVGElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string | number>,
-): SVGElementTagNameMap[K] {
-  const node = document.createElementNS(SVG_NS, tag)
-  for (const [k, v] of Object.entries(attrs)) {
-    node.setAttribute(k, String(v))
-  }
-  return node
-}
-
-function createSvgFilterElement(
-  filterId: string,
-  dataUrl: string,
-  width: number,
-  height: number,
-  strength: number,
-  chroma: number,
-): SVGFilterElement {
-  const filter = svgEl('filter', {
-    id: filterId,
-    x: '0%',
-    y: '0%',
-    width: '100%',
-    height: '100%',
-    filterUnits: 'objectBoundingBox',
-    primitiveUnits: 'userSpaceOnUse',
-    'color-interpolation-filters': 'sRGB',
-  })
-
-  const feImage = svgEl('feImage', {
-    href: dataUrl,
-    x: 0,
-    y: 0,
-    width,
-    height,
-    preserveAspectRatio: 'none',
-    result: 'lgMap',
-  })
-  feImage.setAttributeNS(XLINK_NS, 'xlink:href', dataUrl)
-  filter.appendChild(feImage)
-
-  const baseScale = strength * Math.min(width, height) * 2
-
-  if (chroma <= 0.001) {
-    filter.appendChild(
-      svgEl('feDisplacementMap', {
-        in: 'SourceGraphic',
-        in2: 'lgMap',
-        scale: baseScale.toFixed(3),
-        xChannelSelector: 'R',
-        yChannelSelector: 'G',
-      }),
-    )
-    return filter
+  let count = 0
+  const push = (col: number, row: number, vx: number, vy: number, a: number) => {
+    indices[count] = row * bufWidth + col
+    px[count] = col
+    py[count] = row
+    vecX[count] = vx
+    vecY[count] = vy
+    alpha[count] = a
+    count++
   }
 
-  // Chromatic dispersion: R, G, B split with strength * (1 ± chroma * 0.18)
-  const spread = chroma * 0.18
-  const scaleR = baseScale * (1 - spread)
-  const scaleG = baseScale
-  const scaleB = baseScale * (1 + spread)
+  for (let y = 0; y < qH; y++) {
+    const cy = curve.hh - (y + 0.5) * invScale
+    const my = bufHeight - 1 - y
 
-  filter.appendChild(
-    svgEl('feDisplacementMap', {
-      in: 'SourceGraphic',
-      in2: 'lgMap',
-      scale: scaleR.toFixed(3),
-      xChannelSelector: 'R',
-      yChannelSelector: 'G',
-      result: 'dispR',
-    }),
-  )
-  filter.appendChild(
-    svgEl('feColorMatrix', {
-      in: 'dispR',
-      type: 'matrix',
-      values: '1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0',
-      result: 'chanR',
-    }),
-  )
+    for (let x = 0; x < qW; x++) {
+      const cx = curve.hw - (x + 0.5) * invScale
+      const mx = bufWidth - 1 - x
 
-  filter.appendChild(
-    svgEl('feDisplacementMap', {
-      in: 'SourceGraphic',
-      in2: 'lgMap',
-      scale: scaleG.toFixed(3),
-      xChannelSelector: 'R',
-      yChannelSelector: 'G',
-      result: 'dispG',
-    }),
-  )
-  filter.appendChild(
-    svgEl('feColorMatrix', {
-      in: 'dispG',
-      type: 'matrix',
-      values: '0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0',
-      result: 'chanG',
-    }),
-  )
+      const sample = evalTopLeftBevel(cx, cy, curve)
+      if (!sample) continue
 
-  filter.appendChild(
-    svgEl('feDisplacementMap', {
-      in: 'SourceGraphic',
-      in2: 'lgMap',
-      scale: scaleB.toFixed(3),
-      xChannelSelector: 'R',
-      yChannelSelector: 'G',
-      result: 'dispB',
-    }),
-  )
-  filter.appendChild(
-    svgEl('feColorMatrix', {
-      in: 'dispB',
-      type: 'matrix',
-      values: '0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0',
-      result: 'chanB',
-    }),
-  )
+      const aByte = Math.round(sample.outerAlpha * sample.innerAlpha * 255)
+      if (aByte === 0) continue
 
-  filter.appendChild(
-    svgEl('feBlend', {
-      in: 'chanR',
-      in2: 'chanG',
-      mode: 'screen',
-      result: 'chanRG',
-    }),
-  )
-  filter.appendChild(
-    svgEl('feBlend', {
-      in: 'chanRG',
-      in2: 'chanB',
-      mode: 'screen',
-    }),
-  )
+      const { dx, dy } = sample
+      push(x, y, dx, dy, aByte)
+      if (mx !== x) push(mx, y, -dx, dy, aByte)
+      if (my !== y) push(x, my, dx, -dy, aByte)
+      if (mx !== x && my !== y) push(mx, my, -dx, -dy, aByte)
+    }
+  }
 
-  return filter
+  return {
+    fieldId,
+    hash,
+    width: w,
+    height: h,
+    borderRadius: r,
+    scale,
+    bufWidth,
+    bufHeight,
+    count,
+    indices: indices.subarray(0, count),
+    px: px.subarray(0, count),
+    py: py.subarray(0, count),
+    vecX: vecX.subarray(0, count),
+    vecY: vecY.subarray(0, count),
+    alpha: alpha.subarray(0, count),
+  }
 }
 
-/**
- * Acquires a shared, deduplicated SVG `<filter>` for the given geometry & optical spec.
- * Always assigns a monotonically increasing revision ID whenever a new filter node is created
- * so Safari/WebKit never displays stale cached SVG filter results.
- */
-export function acquireFilter(spec: FilterSpec): AcquiredFilter | null {
-  const defs = ensureSharedDefs()
-  if (!defs) return null
-
-  const norm = normalizeMapSpec(spec)
-  const strength = clamp(spec.strength, 0, 0.2)
-  const chroma = clamp01(spec.chroma)
-  const hash = buildFilterHash(spec)
-
-  const existing = activeFilters.get(hash)
-  if (existing && existing.node.isConnected) {
+export function acquireBevelField(spec: BevelSpec): AcquiredBevel {
+  const hash = buildBevelHash(spec)
+  const existing = activeBevels.get(hash)
+  if (existing) {
     existing.refCount += 1
     notifyStats()
-    return {
-      filterId: existing.filterId,
-      dataUrl: existing.dataUrl,
-      hash,
-    }
+    return { field: existing.field, dataUrl: existing.dataUrl }
   }
 
-  const dataUrl = generateDisplacementMap(spec)
-  if (!dataUrl) return null
-
   revisionCounter += 1
-  const filterId = `lg-f${revisionCounter}`
-  const node = createSvgFilterElement(filterId, dataUrl, norm.w, norm.h, strength, chroma)
-  defs.appendChild(node)
+  const fieldId = `lg-b${revisionCounter}`
+  const dataUrl = generateDisplacementMap(spec)
+  const field = buildBevelField(fieldId, hash, spec)
 
-  activeFilters.set(hash, {
-    filterId,
-    dataUrl,
-    node,
-    refCount: 1,
-  })
+  activeBevels.set(hash, { field, dataUrl, refCount: 1 })
   notifyStats()
-
-  return { filterId, dataUrl, hash }
+  return { field, dataUrl }
 }
 
-export function releaseFilter(hash: string): void {
-  const entry = activeFilters.get(hash)
+export function releaseBevelField(hash: string): void {
+  const entry = activeBevels.get(hash)
   if (!entry) return
   entry.refCount -= 1
   if (entry.refCount <= 0) {
-    entry.node.remove()
-    activeFilters.delete(hash)
+    activeBevels.delete(hash)
   }
   notifyStats()
 }
 
-let cachedBackdropSupport: boolean | null = null
+function sampleChannel(
+  srcData: Uint8ClampedArray,
+  srcW: number,
+  maxX: number,
+  maxY: number,
+  sx: number,
+  sy: number,
+  channel: number,
+): number {
+  const cx = sx < 0 ? 0 : sx > maxX ? maxX : sx
+  const cy = sy < 0 ? 0 : sy > maxY ? maxY : sy
+  const x0 = cx | 0
+  const y0 = cy | 0
+  const x1 = x0 < maxX ? x0 + 1 : x0
+  const y1 = y0 < maxY ? y0 + 1 : y0
+  const fx = cx - x0
+  const fy = cy - y0
+  const invFx = 1 - fx
+  const invFy = 1 - fy
 
-/**
- * Chromium (Blink) supports `backdrop-filter: url(#svg-filter)`.
- * Safari (macOS/iOS WebKit) and Firefox (Gecko) ignore SVG URLs in `backdrop-filter`,
- * though they fully support `filter: url(#svg-filter)` on target elements.
- */
-export function supportsBackdropSvgFilter(): boolean {
-  if (cachedBackdropSupport !== null) return cachedBackdropSupport
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+  const row0 = y0 * srcW
+  const row1 = y1 * srcW
+  const i00 = (row0 + x0) * 4 + channel
+  const i10 = (row0 + x1) * 4 + channel
+  const i01 = (row1 + x0) * 4 + channel
+  const i11 = (row1 + x1) * 4 + channel
 
-  const ua = navigator.userAgent
-  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  const isFirefox = /Firefox|FxiOS/.test(ua)
-  const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|CriOS|FxiOS/.test(ua)
-
-  const hasCssBackdrop =
-    typeof CSS !== 'undefined' &&
-    typeof CSS.supports === 'function' &&
-    (CSS.supports('backdrop-filter', 'url(#lg-probe)') || CSS.supports('-webkit-backdrop-filter', 'url(#lg-probe)'))
-
-  cachedBackdropSupport = !isIOS && !isFirefox && !isSafari && hasCssBackdrop
-  return cachedBackdropSupport
+  const top = srcData[i00] * invFx + srcData[i10] * fx
+  const bot = srcData[i01] * invFx + srcData[i11] * fx
+  return top * invFy + bot * fy
 }
 
+/**
+ * Renders only the displaced 1/4-mirrored bevel ring into `outImageData` by bilinearly
+ * sampling `snapshot.data` with optional chromatic R/G/B dispersion.
+ */
+export function renderRefractedBevel(
+  ctx: CanvasRenderingContext2D,
+  outImageData: ImageData,
+  field: BevelField,
+  snapshot: TargetSnapshot,
+  offsetX: number,
+  offsetY: number,
+  strength: number,
+  chroma: number,
+): void {
+  const outData = outImageData.data
+  const out32 = new Uint32Array(outData.buffer)
+  out32.fill(0)
+
+  const dispCssPx = clamp(strength, 0, 0.2) * Math.min(field.width, field.height)
+  if (dispCssPx <= 0.001 || field.count === 0) {
+    ctx.putImageData(outImageData, 0, 0)
+    return
+  }
+
+  const srcData = snapshot.data
+  const srcW = snapshot.width
+  const srcScale = snapshot.scale
+  const maxX = srcW - 1
+  const maxY = snapshot.height - 1
+  const dispBufScale = dispCssPx * srcScale
+  const ratio = srcScale / field.scale
+  const baseOffsetSx = offsetX * srcScale - 0.5
+  const baseOffsetSy = offsetY * srcScale - 0.5
+
+  const { count, indices, px, py, vecX, vecY, alpha } = field
+  const spread = clamp01(chroma) * 0.18
+  const useChroma = spread > 0.0005
+
+  if (!useChroma) {
+    for (let i = 0; i < count; i++) {
+      const sx = baseOffsetSx + (px[i] + 0.5) * ratio + vecX[i] * dispBufScale
+      const sy = baseOffsetSy + (py[i] + 0.5) * ratio + vecY[i] * dispBufScale
+
+      const cx = sx < 0 ? 0 : sx > maxX ? maxX : sx
+      const cy = sy < 0 ? 0 : sy > maxY ? maxY : sy
+      const x0 = cx | 0
+      const y0 = cy | 0
+      const x1 = x0 < maxX ? x0 + 1 : x0
+      const y1 = y0 < maxY ? y0 + 1 : y0
+      const fx = cx - x0
+      const fy = cy - y0
+      const w00 = (1 - fx) * (1 - fy)
+      const w10 = fx * (1 - fy)
+      const w01 = (1 - fx) * fy
+      const w11 = fx * fy
+
+      const row0 = y0 * srcW
+      const row1 = y1 * srcW
+      const i00 = (row0 + x0) * 4
+      const i10 = (row0 + x1) * 4
+      const i01 = (row1 + x0) * 4
+      const i11 = (row1 + x1) * 4
+
+      const dst = indices[i] * 4
+      outData[dst] = srcData[i00] * w00 + srcData[i10] * w10 + srcData[i01] * w01 + srcData[i11] * w11
+      outData[dst + 1] = srcData[i00 + 1] * w00 + srcData[i10 + 1] * w10 + srcData[i01 + 1] * w01 + srcData[i11 + 1] * w11
+      outData[dst + 2] = srcData[i00 + 2] * w00 + srcData[i10 + 2] * w10 + srcData[i01 + 2] * w01 + srcData[i11 + 2] * w11
+      const sA = srcData[i00 + 3] * w00 + srcData[i10 + 3] * w10 + srcData[i01 + 3] * w01 + srcData[i11 + 3] * w11
+      outData[dst + 3] = (alpha[i] * sA) / 255
+    }
+  } else {
+    const rMult = 1 - spread
+    const bMult = 1 + spread
+
+    for (let i = 0; i < count; i++) {
+      const bx = baseOffsetSx + (px[i] + 0.5) * ratio
+      const by = baseOffsetSy + (py[i] + 0.5) * ratio
+      const dx = vecX[i] * dispBufScale
+      const dy = vecY[i] * dispBufScale
+
+      const sxG = bx + dx
+      const syG = by + dy
+      const sxR = bx + dx * rMult
+      const syR = by + dy * rMult
+      const sxB = bx + dx * bMult
+      const syB = by + dy * bMult
+
+      const dst = indices[i] * 4
+      outData[dst] = sampleChannel(srcData, srcW, maxX, maxY, sxR, syR, 0)
+      outData[dst + 1] = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 1)
+      outData[dst + 2] = sampleChannel(srcData, srcW, maxX, maxY, sxB, syB, 2)
+      const sA = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 3)
+      outData[dst + 3] = (alpha[i] * sA) / 255
+    }
+  }
+
+  ctx.putImageData(outImageData, 0, 0)
+}

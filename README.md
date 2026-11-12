@@ -1,6 +1,6 @@
 # liquid-glass-react
 
-Zero-dependency Liquid Glass engine and `<LiquidGlass />` React + TypeScript component combining a custom 1/4-quadrant SDF edge-refraction generator (SVG displacement map) with hardware-accelerated CSS optics.
+Zero-dependency Liquid Glass engine and `<LiquidGlass />` React + TypeScript component combining a custom 1/4-quadrant SDF Canvas refraction engine (working uniformly across Chrome Desktop, Chrome iOS, Safari iOS/macOS, and Firefox) with universal hardware-accelerated CSS optics.
 
 ```bash
 npm install && npm run dev
@@ -8,5 +8,6 @@ npm install && npm run dev
 
 ## Architecture
 
-- [`src/glass/refractionEngine.ts`](src/glass/refractionEngine.ts) — Offscreen `<canvas>` 1/4-quadrant symmetric rounded-rect SDF displacement map generator (`R = ΔX`, `G = ΔY`, `128 = neutral`), PNG LRU cache, deduplicated global `<svg><defs>` filter registry (`chroma === 0` single `<feDisplacementMap>` vs `chroma > 0` R/G/B `<feColorMatrix>` + `<feBlend mode="screen">`), and monotonically versioned filter IDs for Safari/WebKit cache invalidation.
-- [`src/glass/LiquidGlass.tsx`](src/glass/LiquidGlass.tsx) & [`src/glass/LiquidGlass.css`](src/glass/LiquidGlass.css) — Supports `mode="layer"` (Apple Material node tracking parent dimensions and border radius via `ResizeObserver`) and `mode="wrapper"` / `refractionTarget` (cross-browser `filter: url(#svg-id)` target refraction on Safari macOS/iOS & Firefox, plus native `backdrop-filter: url(#svg-id)` on Chromium), overlaid with pure CSS `backdrop-filter` blur, 1.5px `conic-gradient` masked specular rim, and directional inset volumetric glow.
+- [`src/glass/refractionEngine.ts`](src/glass/refractionEngine.ts) — Computes sparse 1/4-quadrant symmetric rounded-rectangle SDF bevel fields (Snell's law + optional RGB chromatic dispersion), caches bevel fields & live R/G debug bitmaps (`128 = neutral`), and runs bilinear Canvas pixel refraction only inside the bevel ring.
+- [`src/glass/domSnapshot.ts`](src/glass/domSnapshot.ts) — Zero-dependency DOM-to-Canvas backdrop rasterizer shared across multiple `<LiquidGlass />` consumers targeting the same scene, eliminating Safari/iOS WebKit SVG `<feDisplacementMap>` limitations.
+- [`src/glass/LiquidGlass.tsx`](src/glass/LiquidGlass.tsx) & [`src/glass/LiquidGlass.css`](src/glass/LiquidGlass.css) — Supports `mode="layer"` (Apple Material node tracking parent dimensions, border radius, and alpha tint via `ResizeObserver`) and `mode="wrapper"` / `refractionTarget`, overlaid with pure CSS `backdrop-filter` blur, 1.5px directional / Apple-style specular rim, and volumetric glow.

@@ -1,18 +1,23 @@
 export { LiquidGlass } from './LiquidGlass'
 export {
-  acquireFilter,
-  buildFilterHash,
-  ensureBitmapDecoded,
+  getTargetSnapshot,
+  subscribeTargetSnapshot,
+  type TargetSnapshot,
+} from './domSnapshot'
+export {
+  acquireBevelField,
+  buildBevelHash,
+  chooseRenderScale,
   generateDisplacementMap,
-  getFilterStats,
-  isBitmapDecoded,
-  releaseFilter,
-  subscribeFilterStats,
-  supportsBackdropSvgFilter,
-  type AcquiredFilter,
+  getEngineStats,
+  releaseBevelField,
+  renderRefractedBevel,
+  subscribeEngineStats,
+  type AcquiredBevel,
+  type BevelField,
+  type BevelSpec,
   type DisplacementMapSpec,
-  type FilterSpec,
-  type FilterStats,
+  type EngineStats,
 } from './refractionEngine'
 export {
   DEFAULT_LENS_SIZE,

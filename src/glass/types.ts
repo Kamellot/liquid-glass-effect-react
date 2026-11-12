@@ -31,7 +31,8 @@ export type LiquidGlassMode = 'layer' | 'wrapper'
 export type SpecularMode = 'directional' | 'apple'
 
 export interface DisplacementMapInfo {
-  filterId: string | null
+  /** Shared cached bevel field revision identifier (e.g. `lg-b1`), or `null` when strength is 0. */
+  fieldId: string | null
   dataUrl: string | null
   width: number
   height: number
@@ -42,13 +43,13 @@ export interface DisplacementMapInfo {
 export interface LiquidGlassProps extends LiquidGlassOptions {
   /** Integration pattern: Apple Material 'layer' (default) or 'wrapper'. */
   mode?: LiquidGlassMode
-  /** Target layer element/ref for universal cross-browser `filter: url(#svg-id)` refraction. */
+  /** Target layer element/ref for universal cross-browser Canvas SDF refraction. */
   refractionTarget?: RefObject<HTMLElement | null> | HTMLElement | null
   /** Optional children (used in 'wrapper' mode). */
   children?: ReactNode
   className?: string
   style?: CSSProperties
-  /** Callback invoked when the displacement map or filter updates (useful for debug previews). */
+  /** Callback invoked when the displacement map or bevel field updates (useful for debug previews). */
   onMapUpdate?: (info: DisplacementMapInfo) => void
 }
 

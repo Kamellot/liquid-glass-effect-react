@@ -257,7 +257,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
         <article className="card card--text card--stats">
           <h3>60–120 fps</h3>
           <p>
-            1/4 quadrant SDF bitmap cache + deduplicated SVG <code>&lt;filter&gt;</code> nodes + pure GPU-composited
+            1/4 quadrant SDF bevel LUT + custom <code>&lt;canvas&gt;</code> pixel refractor + pure GPU-composited
             CSS optical rims &amp; volumetric glow.
           </p>
         </article>

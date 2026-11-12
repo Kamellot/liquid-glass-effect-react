@@ -1,6 +1,6 @@
 import {
   memo,
-  useEffect,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,13 +8,14 @@ import {
   type CSSProperties,
   type RefObject,
 } from 'react'
+import { getTargetSnapshot, subscribeTargetSnapshot } from './domSnapshot'
 import {
-  acquireFilter,
-  ensureBitmapDecoded,
+  acquireBevelField,
+  chooseRenderScale,
   generateDisplacementMap,
-  isBitmapDecoded,
-  releaseFilter,
-  supportsBackdropSvgFilter,
+  releaseBevelField,
+  renderRefractedBevel,
+  type BevelField,
 } from './refractionEngine'
 import { DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
@@ -62,22 +63,6 @@ function isTransparentBg(bg: string): boolean {
   return !bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)'
 }
 
-function cloneTargetIntoMirror(target: HTMLElement, host: HTMLElement): void {
-  const clone = target.cloneNode(true) as HTMLElement
-  clone.removeAttribute('id')
-  clone.style.margin = '0'
-  clone.style.position = 'relative'
-  clone.style.left = '0'
-  clone.style.top = '0'
-  clone.style.width = `${target.offsetWidth}px`
-  clone.style.height = `${target.offsetHeight}px`
-  clone.style.pointerEvents = 'none'
-
-  clone.querySelectorAll('[data-lg-root], [data-lg-ignore]').forEach((node) => node.remove())
-  clone.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'))
-  host.replaceChildren(clone)
-}
-
 export const LiquidGlass = memo(function LiquidGlass({
   mode = 'layer',
   size,
@@ -98,33 +83,28 @@ export const LiquidGlass = memo(function LiquidGlass({
   onMapUpdate,
 }: LiquidGlassProps) {
   const rootRef = useRef<HTMLDivElement>(null)
-  const mirrorHostRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fieldRef = useRef<BevelField | null>(null)
+  const outImageRef = useRef<ImageData | null>(null)
+  const parentTintRef = useRef<string>('')
+  const opticsRef = useRef({ strength, chroma })
+  opticsRef.current = { strength, chroma }
+
   const onMapUpdateRef = useRef(onMapUpdate)
   onMapUpdateRef.current = onMapUpdate
 
   const [metrics, setMetrics] = useState<BoxMetrics>({ width: 0, height: 0, borderRadius: 0 })
-  const [filterId, setFilterId] = useState<string | null>(null)
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null)
-  const [parentTint, setParentTint] = useState<string>('')
 
   const hasChildren = children !== undefined && children !== null
   const isStandalone = mode === 'wrapper' && !hasChildren
   const explicitSize = mode === 'wrapper' ? size : undefined
 
-  // Resolve refractionTarget after commit
   useLayoutEffect(() => {
     setTargetEl(resolveTarget(refractionTarget))
   }, [refractionTarget])
 
-  // Universal cross-browser target refraction when refractionTarget is present;
-  // otherwise native Chromium backdrop-filter SVG or pure CSS optics.
-  const path = targetEl
-    ? 'target-svg'
-    : supportsBackdropSvgFilter()
-      ? 'backdrop-svg'
-      : 'css-optics'
-
-  // Track element dimensions and border-radius via ResizeObserver
+  // Track box dimensions and computed border-radius via ResizeObserver
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
@@ -145,195 +125,218 @@ export const LiquidGlass = memo(function LiquidGlass({
     return () => ro.disconnect()
   }, [mode, explicitSize, isStandalone, className, style?.borderRadius])
 
-  // Acquire deduplicated SVG filter & generate 1/4-quadrant SDF displacement bitmap
-  useEffect(() => {
-    const { width, height, borderRadius } = metrics
-    if (width < 2 || height < 2) {
-      setFilterId(null)
+  const drawFrame = useCallback(() => {
+    const canvas = canvasRef.current
+    const root = rootRef.current
+    const field = fieldRef.current
+    if (!canvas || !root || !field || !targetEl) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
+    if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
+
+    const { strength: curStrength, chroma: curChroma } = opticsRef.current
+    const snapshot = getTargetSnapshot(targetEl)
+    if (!snapshot || curStrength <= 0.0001) {
+      ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
       return
     }
 
-    const dataUrl = generateDisplacementMap({
+    if (
+      !outImageRef.current ||
+      outImageRef.current.width !== field.bufWidth ||
+      outImageRef.current.height !== field.bufHeight
+    ) {
+      outImageRef.current = ctx.createImageData(field.bufWidth, field.bufHeight)
+    }
+
+    const rootRect = root.getBoundingClientRect()
+    const targetRect = targetEl.getBoundingClientRect()
+    const offsetX = rootRect.left - targetRect.left
+    const offsetY = rootRect.top - targetRect.top
+
+    renderRefractedBevel(
+      ctx,
+      outImageRef.current,
+      field,
+      snapshot,
+      offsetX,
+      offsetY,
+      curStrength,
+      curChroma,
+    )
+
+    if (parentTintRef.current) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'source-atop'
+      ctx.fillStyle = parentTintRef.current
+      ctx.fillRect(0, 0, field.bufWidth, field.bufHeight)
+      ctx.restore()
+    }
+  }, [targetEl])
+
+  // Acquire shared 1/4-SDF bevel field before paint & emit debug R/G map
+  useLayoutEffect(() => {
+    const { width, height, borderRadius } = metrics
+    if (width < 2 || height < 2) {
+      fieldRef.current = null
+      return
+    }
+
+    if (!targetEl) {
+      fieldRef.current = null
+      if (onMapUpdateRef.current) {
+        const dataUrl = generateDisplacementMap({
+          width,
+          height,
+          borderRadius,
+          depth,
+          curvature,
+          splay,
+        })
+        onMapUpdateRef.current({
+          fieldId: opticsRef.current.strength > 0.0001 ? 'css-optics' : null,
+          dataUrl: dataUrl || null,
+          width,
+          height,
+          borderRadius,
+          hash: 'no-target',
+        })
+      }
+      return
+    }
+
+    const scale = chooseRenderScale(width, height, depth)
+    const { field, dataUrl } = acquireBevelField({
       width,
       height,
       borderRadius,
       depth,
       curvature,
       splay,
+      scale,
     })
 
-    if (strength <= 0.0001 || !dataUrl) {
-      setFilterId(null)
-      if (onMapUpdateRef.current) {
-        onMapUpdateRef.current({
-          filterId: null,
-          dataUrl: dataUrl || null,
-          width,
-          height,
-          borderRadius,
-          hash: 'zero-strength',
-        })
+    fieldRef.current = field
+    drawFrame()
+
+    onMapUpdateRef.current?.({
+      fieldId: opticsRef.current.strength > 0.0001 && curvature > 0.001 ? field.fieldId : null,
+      dataUrl: dataUrl || null,
+      width,
+      height,
+      borderRadius,
+      hash: field.hash,
+    })
+
+    return () => {
+      releaseBevelField(field.hash)
+      if (fieldRef.current === field) {
+        fieldRef.current = null
       }
-      return
     }
+  }, [targetEl, metrics, depth, curvature, splay, drawFrame])
 
-    let cancelled = false
-    let acquiredHash: string | null = null
-
-    const attach = () => {
-      if (cancelled) return
-      const acquired = acquireFilter({
-        width,
-        height,
-        borderRadius,
+  // Redraw immediately when optical strength/chroma changes without regenerating bevel field
+  useLayoutEffect(() => {
+    drawFrame()
+    const field = fieldRef.current
+    if (field && onMapUpdateRef.current && targetEl) {
+      const dataUrl = generateDisplacementMap({
+        width: field.width,
+        height: field.height,
+        borderRadius: field.borderRadius,
         depth,
         curvature,
         splay,
-        strength,
-        chroma,
       })
-      if (!acquired || cancelled) {
-        if (acquired) releaseFilter(acquired.hash)
-        return
-      }
-      acquiredHash = acquired.hash
-      setFilterId(acquired.filterId)
-      onMapUpdateRef.current?.({
-        filterId: acquired.filterId,
-        dataUrl: acquired.dataUrl,
-        width,
-        height,
-        borderRadius,
-        hash: acquired.hash,
+      onMapUpdateRef.current({
+        fieldId: strength > 0.0001 && curvature > 0.001 ? field.fieldId : null,
+        dataUrl: dataUrl || null,
+        width: field.width,
+        height: field.height,
+        borderRadius: field.borderRadius,
+        hash: field.hash,
       })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strength, chroma, drawFrame])
 
-    if (isBitmapDecoded(dataUrl)) {
-      attach()
-    } else {
-      // Emit preview immediately while awaiting PNG decode for WebKit <feImage>
-      onMapUpdateRef.current?.({
-        filterId: null,
-        dataUrl,
-        width,
-        height,
-        borderRadius,
-        hash: 'decoding',
-      })
-      void ensureBitmapDecoded(dataUrl).then(attach)
-    }
-
-    return () => {
-      cancelled = true
-      if (acquiredHash) releaseFilter(acquiredHash)
-    }
-  }, [metrics, depth, curvature, splay, strength, chroma])
-
-  // Universal cross-browser target-layer refraction: clone target once & sync only (x, y) on drag/scroll
+  // Subscribe to shared target snapshot + track parent/ancestor movement with zero-frame drag sync
   useLayoutEffect(() => {
-    if (path !== 'target-svg' || !targetEl) return
+    if (!targetEl) return
     const root = rootRef.current
-    const host = mirrorHostRef.current
-    if (!root || !host) return
+    if (!root) return
 
-    let cloneRaf = 0
-    let posRaf = 0
-
-    const syncClone = () => {
-      cloneRaf = 0
-      cloneTargetIntoMirror(targetEl, host)
-    }
-
-    const syncPosition = () => {
-      posRaf = 0
-      const rootRect = root.getBoundingClientRect()
-      const targetRect = targetEl.getBoundingClientRect()
-      const dx = rootRect.left - targetRect.left
-      const dy = rootRect.top - targetRect.top
-      // 2D left/top keeps mirror inside the same software SVG filter pass on iOS WebKit
-      host.style.left = `${-dx}px`
-      host.style.top = `${-dy}px`
-    }
+    let scrollRaf = 0
 
     const syncParentTint = () => {
       if (mode !== 'layer' || !root.parentElement) {
-        setParentTint('')
+        parentTintRef.current = ''
         return
       }
       const bg = getComputedStyle(root.parentElement).backgroundColor
-      setParentTint(isTransparentBg(bg) ? '' : bg)
+      parentTintRef.current = isTransparentBg(bg) ? '' : bg
     }
 
-    syncClone()
-    syncPosition()
+    const unsubSnapshot = subscribeTargetSnapshot(targetEl, drawFrame)
     syncParentTint()
+    drawFrame()
 
-    const schedulePos = () => {
-      if (!posRaf) posRaf = requestAnimationFrame(syncPosition)
-    }
-    const scheduleClone = () => {
-      if (!cloneRaf) cloneRaf = requestAnimationFrame(syncClone)
-    }
-
-    const targetRo = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.target === targetEl) {
-          scheduleClone()
-          break
-        }
+    const scheduleScrollDraw = () => {
+      if (!scrollRaf) {
+        scrollRaf = requestAnimationFrame(() => {
+          scrollRaf = 0
+          drawFrame()
+        })
       }
-      schedulePos()
-    })
-    targetRo.observe(targetEl)
-    targetRo.observe(root)
+    }
 
-    const targetMo = new MutationObserver((records) => {
-      for (const rec of records) {
-        const el = rec.target instanceof Element ? rec.target : rec.target.parentElement
-        if (el && !el.closest('[data-lg-root], [data-lg-ignore]')) {
-          scheduleClone()
-          break
-        }
-      }
-    })
-    targetMo.observe(targetEl, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true,
-    })
+    const posRo = new ResizeObserver(drawFrame)
+    posRo.observe(root)
 
+    // Synchronous redraw inside mutation microtask ensures zero trailing during translate3d drag
     const ancestorMo = new MutationObserver((records) => {
       for (const rec of records) {
         if (rec.target === root.parentElement) {
           syncParentTint()
+          break
         }
       }
-      syncPosition()
+      drawFrame()
     })
+
     let cur: HTMLElement | null = root
     while (cur && cur !== document.documentElement) {
-      ancestorMo.observe(cur, { attributes: true, attributeFilter: ['style', 'class', 'data-tinted'] })
+      ancestorMo.observe(cur, {
+        attributes: true,
+        attributeFilter: ['style', 'class', 'data-tinted'],
+      })
       cur = cur.parentElement
     }
 
     const parentEl = root.parentElement
-    parentEl?.addEventListener('transitionend', syncParentTint)
-    window.addEventListener('scroll', schedulePos, { passive: true, capture: true })
-    window.addEventListener('resize', schedulePos, { passive: true })
+    const onTransitionEnd = () => {
+      syncParentTint()
+      drawFrame()
+    }
+
+    parentEl?.addEventListener('transitionend', onTransitionEnd)
+    window.addEventListener('scroll', scheduleScrollDraw, { passive: true, capture: true })
+    window.addEventListener('resize', scheduleScrollDraw, { passive: true })
 
     return () => {
-      if (cloneRaf) cancelAnimationFrame(cloneRaf)
-      if (posRaf) cancelAnimationFrame(posRaf)
-      targetRo.disconnect()
-      targetMo.disconnect()
+      if (scrollRaf) cancelAnimationFrame(scrollRaf)
+      unsubSnapshot()
+      posRo.disconnect()
       ancestorMo.disconnect()
-      parentEl?.removeEventListener('transitionend', syncParentTint)
-      window.removeEventListener('scroll', schedulePos, true)
-      window.removeEventListener('resize', schedulePos)
-      host.replaceChildren()
+      parentEl?.removeEventListener('transitionend', onTransitionEnd)
+      window.removeEventListener('scroll', scheduleScrollDraw, true)
+      window.removeEventListener('resize', scheduleScrollDraw)
     }
-  }, [path, targetEl, mode])
+  }, [targetEl, mode, drawFrame])
 
   const rootStyle = useMemo<CSSProperties>(() => {
     const rad = ((specularAngle - 90) * Math.PI) / 180
@@ -365,19 +368,6 @@ export const LiquidGlass = memo(function LiquidGlass({
     } as CSSProperties
   }, [blur, edgeHighlight, specularAngle, glow, explicitSize, style])
 
-  const backdropStyle = useMemo<CSSProperties | undefined>(() => {
-    if (path !== 'backdrop-svg' || !filterId) return undefined
-    const filterValue =
-      blur > 0.05
-        ? `url(#${filterId}) blur(${blur.toFixed(1)}px) saturate(180%)`
-        : `url(#${filterId})`
-    return {
-      backdropFilter: filterValue,
-      WebkitBackdropFilter: filterValue,
-    }
-  }, [path, filterId, blur])
-
-  const showSeparateFrost = blur > 0.05 && !(path === 'backdrop-svg' && filterId)
   const isLayer = mode === 'layer'
 
   const rootClassName = [
@@ -393,39 +383,18 @@ export const LiquidGlass = memo(function LiquidGlass({
     <div
       ref={rootRef}
       data-lg-root=""
-      data-lg-path={path}
+      data-lg-engine={targetEl ? 'canvas-sdf' : 'css-optics'}
       className={rootClassName}
       style={rootStyle}
       aria-hidden={isLayer ? 'true' : undefined}
     >
-      {path === 'backdrop-svg' && filterId && (
-        <div className="lg-backdrop" style={backdropStyle} aria-hidden="true" />
-      )}
-
-      {path === 'target-svg' && (
-        <div className="lg-target-clip" aria-hidden="true">
-          <div
-            className="lg-target-filter"
-            style={{
-              width: metrics.width || '100%',
-              height: metrics.height || '100%',
-              ...(filterId
-                ? {
-                    filter: `url(#${filterId})`,
-                    WebkitFilter: `url(#${filterId})`,
-                  }
-                : null),
-            }}
-          >
-            <div ref={mirrorHostRef} className="lg-target-mirror" />
-          </div>
-          {parentTint && (
-            <div className="lg-target-tint" style={{ backgroundColor: parentTint }} />
-          )}
+      {targetEl && (
+        <div className="lg-refract-clip" aria-hidden="true">
+          <canvas ref={canvasRef} className="lg-refract-canvas" />
         </div>
       )}
 
-      {showSeparateFrost && <div className="lg-frost" aria-hidden="true" />}
+      {blur > 0.05 && <div className="lg-frost" aria-hidden="true" />}
 
       {glow > 0.001 && (
         <div

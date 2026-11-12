@@ -121,8 +121,8 @@ export function Hero({ lens }: HeroProps) {
         </h1>
 
         <p className="hero-sub">
-          Drag the circular lens across typography and the cosmic boundary. A 1/4 quadrant SDF builds the R/G bevel
-          displacement map, while blur, rim speculars, and inner glow run in hardware-accelerated CSS.
+          Drag the circular lens across typography and the cosmic boundary. A custom 1/4-quadrant SDF bevel engine bends
+          pixels on <code>&lt;canvas&gt;</code> across every browser, while blur, rim speculars, and inner glow run in CSS.
         </p>
 
         <div
@@ -163,7 +163,7 @@ export function Hero({ lens }: HeroProps) {
             <div className="debug-row debug-row--muted">
               <span>1/4 SDF mirrored</span>
               <span>·</span>
-              <code>{mapInfo?.filterId ? `#${mapInfo.filterId}` : 'neutral'}</code>
+              <code>{mapInfo?.fieldId ? `#${mapInfo.fieldId}` : 'neutral'}</code>
             </div>
             <div className="debug-legend">
               <span className="legend-r">R: ΔX</span>
