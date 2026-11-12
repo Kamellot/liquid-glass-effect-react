@@ -586,6 +586,10 @@ button {
   .cp {
     padding: 14px 16px;
   }
+  .cp--closed {
+    width: auto;
+    padding: 8px 10px;
+  }
   .cp-grid {
     grid-template-columns: 1fr;
   }

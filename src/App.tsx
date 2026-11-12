@@ -13,7 +13,9 @@ const statsSnapshot = () => {
 export default function App() {
   const [params, setParams] = useState<DemoParams>(DEFAULT_PARAMS)
   const [engine, setEngine] = useState<GlassEngine>('auto')
-  const [panelOpen, setPanelOpen] = useState(true)
+  const [panelOpen, setPanelOpen] = useState(
+    () => typeof window !== 'undefined' && !window.matchMedia('(max-width: 860px)').matches
+  )
   const stats = useSyncExternalStore(subscribeFilterStats, statsSnapshot, () => '')
 
   const patch = useCallback((p: Partial<DemoParams>) => setParams((prev) => ({ ...prev, ...p })), [])
