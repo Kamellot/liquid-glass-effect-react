@@ -24,6 +24,8 @@ export interface LiquidGlassOptions {
   specularAngle?: number
   /** Specular shine style: rotating 'directional' conic/angled highlight or uniform top/bottom 'apple' rim. */
   specularMode?: SpecularMode
+  /** Optional UI background color/tint fill applied seamlessly across interior and refracted bevel. */
+  tint?: string
 }
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
@@ -55,7 +57,7 @@ export interface LiquidGlassProps extends LiquidGlassOptions {
 
 export const DEFAULT_LENS_SIZE = 166
 
-export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size'>> = {
+export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size' | 'tint'>> = {
   strength: 0.08,
   curvature: 0.99,
   depth: 4,

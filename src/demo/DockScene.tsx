@@ -100,7 +100,93 @@ const APPS: AppDef[] = [
   },
 ]
 
-function AppIcon({ app }: { app: AppDef }) {
+interface CardDef {
+  id: string
+  kind: 'text' | 'art'
+  title: string
+  searchText: string
+}
+
+const CARDS: CardDef[] = [
+  {
+    id: 'refraction',
+    kind: 'text',
+    title: 'Refraction, not blur',
+    searchText:
+      'Refraction, not blur Text borders and cosmic gradients behind the glass bend physically along the bevel with RGB chromatic dispersion transparent alpha tint',
+  },
+  {
+    id: 'music',
+    kind: 'art',
+    title: 'Aurora Borealis',
+    searchText: 'Now playing Aurora Borealis Hypnotic Drift 3:42 music equalizer',
+  },
+  {
+    id: 'perf',
+    kind: 'text',
+    title: '60–120 fps',
+    searchText:
+      '60-120 fps 1/4 quadrant SDF bevel LUT custom canvas pixel refractor GPU composited CSS optical rims volumetric glow',
+  },
+]
+
+const GLASS_TINTS = [
+  { id: 'smoke', label: 'Smoke', color: 'rgb(38 42 58 / 0.34)', dot: '#3a4158' },
+  { id: 'indigo', label: 'Indigo', color: 'rgb(94 92 230 / 0.28)', dot: '#6c6aff' },
+  { id: 'emerald', label: 'Emerald', color: 'rgb(32 168 96 / 0.26)', dot: '#30d158' },
+  { id: 'rose', label: 'Rose', color: 'rgb(232 76 122 / 0.26)', dot: '#ff4f87' },
+  { id: 'frost', label: 'Frost', color: 'rgb(255 255 255 / 0.16)', dot: '#e5e9f2' },
+] as const
+
+/** Shared pointer-drag hook for translating floating showcase surfaces. */
+function useDragTranslate(ignoreSelector?: string) {
+  const ref = useRef<HTMLDivElement>(null)
+  const offset = useRef({ x: 0, y: 0 })
+  const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (ignoreSelector && e.target instanceof Element && e.target.closest(ignoreSelector)) return
+      drag.current = {
+        id: e.pointerId,
+        sx: e.clientX,
+        sy: e.clientY,
+        ox: offset.current.x,
+        oy: offset.current.y,
+        moved: false,
+      }
+    },
+    [ignoreSelector],
+  )
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current
+    const el = ref.current
+    if (!d || d.id !== e.pointerId || !el) return
+    const dx = e.clientX - d.sx
+    const dy = e.clientY - d.sy
+    if (!d.moved && Math.hypot(dx, dy) > 5) {
+      d.moved = true
+      el.setPointerCapture(e.pointerId)
+      el.dataset.dragging = 'true'
+    }
+    if (!d.moved) return
+    offset.current.x = d.ox + dx
+    offset.current.y = d.oy + dy
+    el.style.transform = `translate3d(${offset.current.x}px, ${offset.current.y}px, 0)`
+  }, [])
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current
+    if (!d || d.id !== e.pointerId) return
+    drag.current = null
+    if (ref.current) delete ref.current.dataset.dragging
+  }, [])
+
+  return { ref, onPointerDown, onPointerMove, onPointerUp }
+}
+
+function AppIcon({ app, dimmed }: { app: AppDef; dimmed?: boolean }) {
   const [bounce, setBounce] = useState(0)
   return (
     <button
@@ -108,6 +194,7 @@ function AppIcon({ app }: { app: AppDef }) {
       className="app-icon"
       key={bounce}
       data-bounce={bounce ? 'true' : undefined}
+      data-dimmed={dimmed ? 'true' : undefined}
       aria-label={app.name}
       onClick={() => setBounce((b) => b + 1)}
     >
@@ -124,52 +211,28 @@ function AppIcon({ app }: { app: AppDef }) {
 const CHIPS = ['All', 'Photos', 'Albums', 'Shared'] as const
 
 /**
- * Apple iPad Dock / Bottom Bar demo built with the Apple layer hierarchy:
- * Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons.
+ * Apple iPad Dock, iOS Switch, and Floating Search showcase built with the Apple layer hierarchy:
+ * Container -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> Foreground Content.
  */
 export function DockScene({ glass }: { glass: LiquidGlassProps }) {
   const sceneRef = useRef<HTMLDivElement>(null)
-  const dockRef = useRef<HTMLDivElement>(null)
-  const offset = useRef({ x: 0, y: 0 })
-  const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
+  const dockDrag = useDragTranslate()
+  const searchDrag = useDragTranslate('input, button')
 
   const [alphaTinted, setAlphaTinted] = useState(true)
+  const [tintId, setTintId] = useState<(typeof GLASS_TINTS)[number]['id']>('smoke')
+  const [switchPressed, setSwitchPressed] = useState(false)
   const [activeChip, setActiveChip] = useState<string>('All')
+  const [searchQuery, setSearchQuery] = useState('')
 
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    drag.current = {
-      id: e.pointerId,
-      sx: e.clientX,
-      sy: e.clientY,
-      ox: offset.current.x,
-      oy: offset.current.y,
-      moved: false,
-    }
-  }, [])
+  const activeTint = GLASS_TINTS.find((t) => t.id === tintId) ?? GLASS_TINTS[0]
+  const appliedTint = alphaTinted ? activeTint.color : 'transparent'
 
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const d = drag.current
-    const dock = dockRef.current
-    if (!d || d.id !== e.pointerId || !dock) return
-    const dx = e.clientX - d.sx
-    const dy = e.clientY - d.sy
-    if (!d.moved && Math.hypot(dx, dy) > 5) {
-      d.moved = true
-      dock.setPointerCapture(e.pointerId)
-      dock.dataset.dragging = 'true'
-    }
-    if (!d.moved) return
-    offset.current.x = d.ox + dx
-    offset.current.y = d.oy + dy
-    dock.style.transform = `translate3d(${offset.current.x}px, ${offset.current.y}px, 0)`
-  }, [])
-
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const d = drag.current
-    if (!d || d.id !== e.pointerId) return
-    drag.current = null
-    if (dockRef.current) delete dockRef.current.dataset.dragging
-  }, [])
+  const query = searchQuery.trim().toLowerCase()
+  const cardMatches = CARDS.map((c) => !query || c.searchText.toLowerCase().includes(query))
+  const appMatches = APPS.map((a) => !query || a.name.toLowerCase().includes(query))
+  const matchCount =
+    cardMatches.filter(Boolean).length + appMatches.filter(Boolean).length
 
   return (
     <section ref={sceneRef} className="scene" role="region" aria-labelledby="dock-title">
@@ -179,26 +242,69 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
         <div>
           <p className="scene-clock">9:41</p>
           <h2 id="dock-title" className="scene-date">
-            Thursday, 12 November · Drag the dock across the cards
+            Thursday, 12 November · Drag the dock or search bar across the cards
           </h2>
         </div>
 
-        <div className="scene-controls" data-lg-ignore="">
-          <div className="dock-tint-toggle" role="group" aria-label="Dock Material fill mode">
-            <button
-              type="button"
-              className={'seg' + (alphaTinted ? ' seg--on' : '')}
-              onClick={() => setAlphaTinted(true)}
-            >
-              Alpha Tint
-            </button>
-            <button
-              type="button"
-              className={'seg' + (!alphaTinted ? ' seg--on' : '')}
-              onClick={() => setAlphaTinted(false)}
-            >
-              Transparent
-            </button>
+        <div className="scene-controls">
+          <div className="scene-tint-bar">
+            <div className="tint-swatches" role="group" aria-label="Liquid Glass UI background tint">
+              {GLASS_TINTS.map((swatch) => {
+                const selected = alphaTinted && tintId === swatch.id
+                return (
+                  <button
+                    key={swatch.id}
+                    type="button"
+                    className={'tint-swatch' + (selected ? ' tint-swatch--on' : '')}
+                    style={{ background: swatch.dot }}
+                    aria-label={`${swatch.label} background tint`}
+                    aria-pressed={selected}
+                    title={`${swatch.label} tint`}
+                    onClick={() => {
+                      setTintId(swatch.id)
+                      setAlphaTinted(true)
+                    }}
+                  />
+                )
+              })}
+            </div>
+
+            <div className="switch-wrap">
+              <span id="ui-tint-label" className="switch-label">
+                UI Tint
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={alphaTinted}
+                aria-labelledby="ui-tint-label"
+                className="apple-switch"
+                data-checked={alphaTinted ? 'true' : 'false'}
+                data-pressed={switchPressed ? 'true' : 'false'}
+                onClick={() => setAlphaTinted((v) => !v)}
+                onPointerDown={() => setSwitchPressed(true)}
+                onPointerUp={() => setSwitchPressed(false)}
+                onPointerLeave={() => setSwitchPressed(false)}
+                onPointerCancel={() => setSwitchPressed(false)}
+              >
+                <span className="apple-switch-thumb" data-lg-ignore="" aria-hidden="true">
+                  <LiquidGlass
+                    mode="layer"
+                    refractionTarget={sceneRef}
+                    strength={Math.max(glass.strength ?? 0.08, 0.09)}
+                    curvature={0.95}
+                    depth={6}
+                    splay={0.82}
+                    chroma={glass.chroma}
+                    blur={0}
+                    edgeHighlight={Math.max(glass.edgeHighlight ?? 0.9, 0.85)}
+                    glow={glass.glow}
+                    specularAngle={glass.specularAngle}
+                    specularMode={glass.specularMode}
+                  />
+                </span>
+              </button>
+            </div>
           </div>
 
           <nav className="seg-bar" aria-label="Library filter">
@@ -210,6 +316,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
                   mode="wrapper"
                   className="seg-chip"
                   refractionTarget={sceneRef}
+                  tint={selected && alphaTinted ? activeTint.color : undefined}
                   strength={0.07}
                   depth={8}
                   blur={0}
@@ -235,15 +342,15 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
       </header>
 
       <div className="scene-cards">
-        <article className="card card--text">
+        <article className="card card--text" data-dimmed={!cardMatches[0] ? 'true' : undefined}>
           <h3>Refraction, not blur</h3>
           <p>
             Text, borders, and cosmic gradients behind the glass bend physically along the bevel with optional RGB
-            chromatic dispersion. Drag the dock over these cards or toggle transparent vs. alpha-tinted fill.
+            chromatic dispersion. Drag the dock or search pill over these cards, or switch tints above.
           </p>
         </article>
 
-        <article className="card card--art">
+        <article className="card card--art" data-dimmed={!cardMatches[1] ? 'true' : undefined}>
           <span className="card-badge">Now playing</span>
           <strong>Aurora Borealis</strong>
           <span>Hypnotic Drift · 3:42</span>
@@ -254,7 +361,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
           </div>
         </article>
 
-        <article className="card card--text card--stats">
+        <article className="card card--text card--stats" data-dimmed={!cardMatches[2] ? 'true' : undefined}>
           <h3>60–120 fps</h3>
           <p>
             1/4 quadrant SDF bevel LUT + custom <code>&lt;canvas&gt;</code> pixel refractor + pure GPU-composited
@@ -263,29 +370,93 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
         </article>
       </div>
 
+      {/* Floating Apple-style Liquid Glass Search Bar (draggable via pill rim / icon) */}
+      <div className="floating-search-slot">
+        <div
+          ref={searchDrag.ref}
+          data-lg-ignore=""
+          className="floating-search"
+          onPointerDown={searchDrag.onPointerDown}
+          onPointerMove={searchDrag.onPointerMove}
+          onPointerUp={searchDrag.onPointerUp}
+          onPointerCancel={searchDrag.onPointerUp}
+        >
+          <LiquidGlass
+            mode="wrapper"
+            className="floating-search-glass"
+            refractionTarget={sceneRef}
+            tint={alphaTinted ? activeTint.color : undefined}
+            strength={Math.max(glass.strength ?? 0.08, 0.065)}
+            curvature={glass.curvature}
+            depth={Math.max(glass.depth ?? 6, 6)}
+            splay={glass.splay}
+            chroma={glass.chroma}
+            blur={glass.blur}
+            edgeHighlight={Math.max(glass.edgeHighlight ?? 0.75, 0.65)}
+            glow={glass.glow}
+            specularAngle={glass.specularAngle}
+            specularMode={glass.specularMode}
+          >
+            <div className="floating-search-inner">
+              <svg className="floating-search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="8.75" cy="8.75" r="5.5" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M13 13l4.2 4.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              <input
+                type="search"
+                className="floating-search-input"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search cards & dock apps… (drag pill)"
+                aria-label="Search cards and dock apps"
+              />
+              {query && (
+                <>
+                  <span className="floating-search-count" aria-live="polite">
+                    {matchCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="floating-search-clear"
+                    aria-label="Clear search"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    ×
+                  </button>
+                </>
+              )}
+            </div>
+          </LiquidGlass>
+        </div>
+      </div>
+
       <p className="scene-watermark" aria-hidden="true">
         Dock → Frame → Material [LiquidGlass + Fill] → App Icons
       </p>
 
       {/* Exact Apple layer hierarchy: Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons */}
       <div
-        ref={dockRef}
+        ref={dockDrag.ref}
         data-lg-ignore=""
         className="dock"
         role="toolbar"
         aria-label="iPad Dock (drag to move, click icons to bounce)"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerDown={dockDrag.onPointerDown}
+        onPointerMove={dockDrag.onPointerMove}
+        onPointerUp={dockDrag.onPointerUp}
+        onPointerCancel={dockDrag.onPointerUp}
       >
         <div className="dock-frame">
-          <div className="dock-material" data-tinted={alphaTinted ? 'true' : 'false'}>
+          <div
+            className="dock-material"
+            data-tinted={alphaTinted ? 'true' : 'false'}
+            style={{ backgroundColor: appliedTint }}
+          >
             <LiquidGlass mode="layer" refractionTarget={sceneRef} {...glass} />
           </div>
           <div className="dock-icons">
-            {APPS.map((app) => (
-              <AppIcon key={app.name} app={app} />
+            {APPS.map((app, i) => (
+              <AppIcon key={app.name} app={app} dimmed={!appMatches[i]} />
             ))}
           </div>
         </div>

@@ -43,7 +43,7 @@ function notifySnapshotStats(): void {
   for (const listener of statsListeners) listener()
 }
 
-function isTransparent(color: string): boolean {
+export function isTransparent(color: string): boolean {
   if (!color || color === 'transparent') return true
   const m = /^rgba?\(([^)]+)\)$/i.exec(color.trim())
   if (!m) return false

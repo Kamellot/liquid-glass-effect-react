@@ -250,9 +250,9 @@ button {
 /* ── Dock scene ──────────────────────────────────────────────────────────── */
 .scene {
   position: relative;
-  min-height: 620px;
+  min-height: 640px;
   margin-top: 44px;
-  padding: 34px 34px 128px;
+  padding: 34px 34px 136px;
   border-radius: 36px;
   overflow: hidden;
   isolation: isolate;
@@ -298,13 +298,131 @@ button {
   gap: 12px;
 }
 
-.dock-tint-toggle {
+.scene-tint-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tint-swatches {
   display: inline-flex;
-  gap: 6px;
-  padding: 4px;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
   border-radius: 99px;
-  background: rgb(12 14 20 / 0.52);
+  background: rgb(12 14 20 / 0.56);
   border: 1px solid rgb(255 255 255 / 0.1);
+}
+
+.tint-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgb(255 255 255 / 0.3);
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.tint-swatch:hover {
+  transform: scale(1.1);
+  border-color: rgb(255 255 255 / 0.78);
+}
+
+.tint-swatch--on {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.34);
+  transform: scale(1.06);
+}
+
+.tint-swatch:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 5px 4px 12px;
+  border-radius: 99px;
+  background: rgb(12 14 20 / 0.56);
+  border: 1px solid rgb(255 255 255 / 0.1);
+}
+
+.switch-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.86);
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+/* Apple iOS 26 style switch: track painted in domSnapshot so the sliding glass thumb refracts the seam */
+.apple-switch {
+  position: relative;
+  width: 66px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  background: rgb(120 120 128 / 0.44);
+  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.36);
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.apple-switch[data-checked='true'] {
+  background: #34c759;
+  border-color: rgb(255 255 255 / 0.28);
+  box-shadow:
+    inset 0 1px 3px rgb(0 0 0 / 0.18),
+    0 0 14px rgb(52 199 89 / 0.25);
+}
+
+.apple-switch:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+.apple-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 36px;
+  height: 26px;
+  border-radius: 999px;
+  background-color: rgb(255 255 255 / 0.78);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.3);
+  transform: translateX(0);
+  transition:
+    transform 260ms cubic-bezier(0.32, 1.18, 0.45, 1),
+    width 170ms ease,
+    height 170ms ease,
+    top 170ms ease,
+    background-color 150ms ease;
+}
+
+.apple-switch[data-checked='true'] .apple-switch-thumb {
+  transform: translateX(22px);
+}
+
+.apple-switch:hover .apple-switch-thumb {
+  background-color: rgb(255 255 255 / 0.56);
+}
+
+.apple-switch[data-pressed='true'] .apple-switch-thumb {
+  top: 1px;
+  width: 44px;
+  height: 30px;
+  background-color: rgb(255 255 255 / 0.14);
+  transform: translateX(-1px);
+}
+
+.apple-switch[data-checked='true'][data-pressed='true'] .apple-switch-thumb {
+  transform: translateX(15px);
 }
 
 .seg-bar {
@@ -349,6 +467,12 @@ button {
   border-radius: 24px;
   background: rgb(10 12 20 / 0.4);
   border: 1px solid rgb(255 255 255 / 0.08);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.card[data-dimmed='true'] {
+  opacity: 0.34;
+  transform: scale(0.975);
 }
 
 .card h3 {
@@ -431,14 +555,121 @@ button {
   }
 }
 
+/* ── Floating Apple Liquid Glass Search Bar ──────────────────────────────── */
+.floating-search-slot {
+  display: flex;
+  justify-content: center;
+  margin-top: 26px;
+  position: relative;
+  z-index: 5;
+}
+
+.floating-search {
+  width: min(100%, 460px);
+  border-radius: 999px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow:
+    0 22px 48px -12px rgb(0 0 0 / 0.52),
+    0 4px 14px rgb(0 0 0 / 0.28);
+}
+
+.floating-search[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.floating-search-glass {
+  width: 100%;
+  height: 52px;
+  border-radius: 999px;
+}
+
+.floating-search:has(.floating-search-input:focus-visible) .floating-search-glass {
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.5);
+}
+
+.floating-search-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 14px 0 18px;
+}
+
+.floating-search-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: rgb(255 255 255 / 0.74);
+  pointer-events: none;
+}
+
+.floating-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.floating-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.floating-search-input::placeholder {
+  color: rgb(255 255 255 / 0.56);
+}
+
+.floating-search-count {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.9);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.floating-search-clear {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.18);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 140ms ease;
+}
+
+.floating-search-clear:hover {
+  background: rgb(255 255 255 / 0.3);
+}
+
+.floating-search-clear:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
 .scene-watermark {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 94px;
-  margin: 0;
+  position: relative;
+  margin: 24px 0 0;
   text-align: center;
-  font-size: clamp(20px, 3vw, 36px);
+  font-size: clamp(18px, 2.8vw, 32px);
   font-weight: 700;
   letter-spacing: -0.03em;
   color: rgb(255 255 255 / 0.84);
@@ -505,8 +736,17 @@ button {
   background: none;
   cursor: pointer;
   border-radius: 15px;
-  transition: transform 260ms cubic-bezier(0.3, 1.5, 0.5, 1);
+  transition:
+    transform 260ms cubic-bezier(0.3, 1.5, 0.5, 1),
+    opacity 200ms ease,
+    filter 200ms ease;
   -webkit-tap-highlight-color: transparent;
+}
+
+.app-icon[data-dimmed='true'] {
+  opacity: 0.28;
+  filter: grayscale(0.45);
+  transform: scale(0.9);
 }
 
 .app-icon:hover {
@@ -820,11 +1060,19 @@ button {
   }
 
   .scene {
-    padding: 22px 16px 130px;
+    padding: 22px 16px 136px;
   }
 
   .scene-controls {
     align-items: flex-start;
+  }
+
+  .floating-search-glass {
+    height: 48px;
+  }
+
+  .floating-search-input {
+    font-size: 16px;
   }
 
   .scene-cards {
@@ -885,5 +1133,11 @@ button {
   .eq i,
   .app-icon[data-bounce='true'] {
     animation: none;
+  }
+
+  .apple-switch-thumb,
+  .card,
+  .app-icon {
+    transition: none;
   }
 }

@@ -9,7 +9,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from 'react'
-import { getTargetSnapshot, subscribeTargetSnapshot } from './domSnapshot'
+import { getTargetSnapshot, isTransparent, subscribeTargetSnapshot } from './domSnapshot'
 import {
   acquireBevelField,
   chooseRenderScale,
@@ -60,10 +60,6 @@ function measureElementBox(el: HTMLElement): BoxMetrics {
   return { width, height, borderRadius }
 }
 
-function isTransparentBg(bg: string): boolean {
-  return !bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)'
-}
-
 export const LiquidGlass = memo(function LiquidGlass({
   mode = 'layer',
   size,
@@ -77,6 +73,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   glow = DEFAULTS.glow,
   specularAngle = DEFAULTS.specularAngle,
   specularMode = DEFAULTS.specularMode,
+  tint,
   refractionTarget,
   children,
   className,
@@ -272,25 +269,55 @@ export const LiquidGlass = memo(function LiquidGlass({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strength, chroma, drawFrame])
 
-  // Subscribe to shared target snapshot + track parent/ancestor movement with zero-frame drag sync
+  // Subscribe to shared target snapshot + track movement, tints & transitions with zero-frame lag
   useLayoutEffect(() => {
     if (!targetEl) return
     const root = rootRef.current
     if (!root) return
 
     let scrollRaf = 0
+    let animRaf = 0
+    let animDeadline = 0
 
-    const syncParentTint = () => {
-      if (mode !== 'layer' || !root.parentElement) {
+    const syncTint = () => {
+      const colorSource = tint !== undefined || mode !== 'layer' ? root : root.parentElement
+      if (!colorSource) {
         parentTintRef.current = ''
         return
       }
-      const bg = getComputedStyle(root.parentElement).backgroundColor
-      parentTintRef.current = isTransparentBg(bg) ? '' : bg
+      const bg = getComputedStyle(colorSource).backgroundColor
+      parentTintRef.current = isTransparent(bg) ? '' : bg
+    }
+
+    const stopAnimLoop = () => {
+      if (animRaf) {
+        cancelAnimationFrame(animRaf)
+        animRaf = 0
+      }
+    }
+
+    const tickAnim = () => {
+      animRaf = 0
+      syncTint()
+      drawFrame()
+      if (performance.now() < animDeadline) {
+        animRaf = requestAnimationFrame(tickAnim)
+      }
+    }
+
+    const startAnimLoop = () => {
+      animDeadline = performance.now() + 450
+      if (!animRaf) animRaf = requestAnimationFrame(tickAnim)
+    }
+
+    const onTransitionFinish = () => {
+      stopAnimLoop()
+      syncTint()
+      drawFrame()
     }
 
     const unsubSnapshot = subscribeTargetSnapshot(targetEl, drawFrame)
-    syncParentTint()
+    syncTint()
     drawFrame()
 
     const scheduleScrollDraw = () => {
@@ -306,45 +333,50 @@ export const LiquidGlass = memo(function LiquidGlass({
     posRo.observe(root)
 
     // Synchronous redraw inside mutation microtask ensures zero trailing during translate3d drag
-    const ancestorMo = new MutationObserver((records) => {
-      for (const rec of records) {
-        if (rec.target === root.parentElement) {
-          syncParentTint()
-          break
-        }
-      }
+    const ancestorMo = new MutationObserver(() => {
+      syncTint()
       drawFrame()
     })
 
-    let cur: HTMLElement | null = root
+    const parentEl = root.parentElement
+    ancestorMo.observe(root, { attributes: true })
+    if (parentEl && parentEl !== document.documentElement) {
+      ancestorMo.observe(parentEl, { attributes: true })
+    }
+    let cur: HTMLElement | null = parentEl?.parentElement ?? null
     while (cur && cur !== document.documentElement) {
       ancestorMo.observe(cur, {
         attributes: true,
-        attributeFilter: ['style', 'class', 'data-tinted'],
+        attributeFilter: ['style', 'class'],
       })
       cur = cur.parentElement
     }
 
-    const parentEl = root.parentElement
-    const onTransitionEnd = () => {
-      syncParentTint()
-      drawFrame()
-    }
-
-    parentEl?.addEventListener('transitionend', onTransitionEnd)
+    root.addEventListener('transitionrun', startAnimLoop)
+    root.addEventListener('transitionend', onTransitionFinish)
+    root.addEventListener('transitioncancel', onTransitionFinish)
+    parentEl?.addEventListener('transitionrun', startAnimLoop)
+    parentEl?.addEventListener('transitionend', onTransitionFinish)
+    parentEl?.addEventListener('transitioncancel', onTransitionFinish)
     window.addEventListener('scroll', scheduleScrollDraw, { passive: true, capture: true })
     window.addEventListener('resize', scheduleScrollDraw, { passive: true })
 
     return () => {
       if (scrollRaf) cancelAnimationFrame(scrollRaf)
+      stopAnimLoop()
       unsubSnapshot()
       posRo.disconnect()
       ancestorMo.disconnect()
-      parentEl?.removeEventListener('transitionend', onTransitionEnd)
+      root.removeEventListener('transitionrun', startAnimLoop)
+      root.removeEventListener('transitionend', onTransitionFinish)
+      root.removeEventListener('transitioncancel', onTransitionFinish)
+      parentEl?.removeEventListener('transitionrun', startAnimLoop)
+      parentEl?.removeEventListener('transitionend', onTransitionFinish)
+      parentEl?.removeEventListener('transitioncancel', onTransitionFinish)
       window.removeEventListener('scroll', scheduleScrollDraw, true)
       window.removeEventListener('resize', scheduleScrollDraw)
     }
-  }, [targetEl, mode, drawFrame])
+  }, [targetEl, mode, tint, drawFrame])
 
   const rootStyle = useMemo<CSSProperties>(() => {
     const rad = ((specularAngle - 90) * Math.PI) / 180
@@ -369,12 +401,15 @@ export const LiquidGlass = memo(function LiquidGlass({
         }
         : {}
 
+    const tintStyle: CSSProperties = tint !== undefined ? { backgroundColor: tint } : {}
+
     return {
       ...sizeStyles,
+      ...tintStyle,
       ...style,
       ...vars,
     } as CSSProperties
-  }, [blur, edgeHighlight, specularAngle, glow, explicitSize, style])
+  }, [blur, edgeHighlight, specularAngle, glow, explicitSize, tint, style])
 
   const isLayer = mode === 'layer'
 
