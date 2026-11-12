@@ -1,7 +1,5 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react'
-import { GlassScene, LiquidGlass, type LiquidGlassProps } from '../glass'
-
-/* ── App icons ─────────────────────────────────────────────────────────────── */
+import { LiquidGlass, type LiquidGlassProps } from '../glass'
 
 interface AppDef {
   name: string
@@ -10,14 +8,25 @@ interface AppDef {
   glyph: ReactNode
 }
 
-const stroke = { fill: 'none', stroke: '#fff', strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
+const iconStroke = {
+  fill: 'none',
+  stroke: '#fff',
+  strokeWidth: 2.2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+} as const
 
 const APPS: AppDef[] = [
   {
     name: 'Messages',
     from: '#5cf27a',
     to: '#14b83a',
-    glyph: <path d="M12 5c4.4 0 8 2.9 8 6.5S16.4 18 12 18c-.9 0-1.8-.1-2.6-.4L5.5 19.5l1.1-3.3C5 15 4 13.4 4 11.5 4 7.9 7.6 5 12 5Z" fill="#fff" />,
+    glyph: (
+      <path
+        d="M12 5c4.4 0 8 2.9 8 6.5S16.4 18 12 18c-.9 0-1.8-.1-2.6-.4L5.5 19.5l1.1-3.3C5 15 4 13.4 4 11.5 4 7.9 7.6 5 12 5Z"
+        fill="#fff"
+      />
+    ),
   },
   {
     name: 'Safari',
@@ -25,7 +34,7 @@ const APPS: AppDef[] = [
     to: '#0a62ff',
     glyph: (
       <>
-        <circle cx="12" cy="12" r="8" {...stroke} />
+        <circle cx="12" cy="12" r="8" {...iconStroke} />
         <path d="m15.5 8.5-2 5-5 2 2-5Z" fill="#fff" />
       </>
     ),
@@ -42,8 +51,17 @@ const APPS: AppDef[] = [
     to: '#ff7a3d',
     glyph: (
       <>
-        {[0, 60, 120, 180, 240, 300].map((a, i) => (
-          <ellipse key={a} cx="12" cy="7.8" rx="2.6" ry="4" fill={['#ff5a5f', '#ffb347', '#ffe36e', '#6ee07a', '#4cb8ff', '#b47cff'][i]} opacity=".92" transform={`rotate(${a} 12 12)`} />
+        {[0, 60, 120, 180, 240, 300].map((angle, i) => (
+          <ellipse
+            key={angle}
+            cx="12"
+            cy="7.8"
+            rx="2.6"
+            ry="4"
+            fill={['#ff5a5f', '#ffb347', '#ffe36e', '#6ee07a', '#4cb8ff', '#b47cff'][i]}
+            opacity=".92"
+            transform={`rotate(${angle} 12 12)`}
+          />
         ))}
       </>
     ),
@@ -54,8 +72,8 @@ const APPS: AppDef[] = [
     to: '#1a6bff',
     glyph: (
       <>
-        <rect x="4" y="6.5" width="16" height="11" rx="2.4" {...stroke} />
-        <path d="m5 8 7 5.2L19 8" {...stroke} />
+        <rect x="4" y="6.5" width="16" height="11" rx="2.4" {...iconStroke} />
+        <path d="m5 8 7 5.2L19 8" {...iconStroke} />
       </>
     ),
   },
@@ -78,11 +96,7 @@ const APPS: AppDef[] = [
     name: 'Notes',
     from: '#ffe66d',
     to: '#ffbf1f',
-    glyph: (
-      <>
-        <path d="M7 8h10M7 12h10M7 16h6" stroke="#6a4a00" strokeWidth="2" strokeLinecap="round" opacity=".75" />
-      </>
-    ),
+    glyph: <path d="M7 8h10M7 12h10M7 16h6" stroke="#6a4a00" strokeWidth="2" strokeLinecap="round" opacity=".75" />,
   },
 ]
 
@@ -107,22 +121,22 @@ function AppIcon({ app }: { app: AppDef }) {
   )
 }
 
-/* ── Scene ──────────────────────────────────────────────────────────────────── */
-
-const CHIPS = ['All', 'Photos', 'Albums', 'Shared']
+const CHIPS = ['All', 'Photos', 'Albums', 'Shared'] as const
 
 /**
- * iPad-style dock over a busy wallpaper. The dock is a normal element with its own
- * alpha fill + shadow; <LiquidGlass /> is dropped in as an aria-hidden "Material"
- * child so the app icons stay interactive on top. You can also drag the dock across
- * the cards to see live refraction across text and borders.
+ * Apple iPad Dock / Bottom Bar demo built with the Apple layer hierarchy:
+ * Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons.
  */
 export function DockScene({ glass }: { glass: LiquidGlassProps }) {
+  const sceneRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
   const offset = useRef({ x: 0, y: 0 })
   const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
 
-  const onDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const [alphaTinted, setAlphaTinted] = useState(true)
+  const [activeChip, setActiveChip] = useState<string>('All')
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     drag.current = {
       id: e.pointerId,
       sx: e.clientX,
@@ -133,24 +147,24 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
     }
   }, [])
 
-  const onMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current
-    const el = dockRef.current
-    if (!d || d.id !== e.pointerId || !el) return
+    const dock = dockRef.current
+    if (!d || d.id !== e.pointerId || !dock) return
     const dx = e.clientX - d.sx
     const dy = e.clientY - d.sy
     if (!d.moved && Math.hypot(dx, dy) > 5) {
       d.moved = true
-      el.setPointerCapture(e.pointerId)
-      el.dataset.dragging = 'true'
+      dock.setPointerCapture(e.pointerId)
+      dock.dataset.dragging = 'true'
     }
     if (!d.moved) return
     offset.current.x = d.ox + dx
     offset.current.y = d.oy + dy
-    el.style.transform = `translate3d(${offset.current.x}px, ${offset.current.y}px, 0)`
+    dock.style.transform = `translate3d(${offset.current.x}px, ${offset.current.y}px, 0)`
   }, [])
 
-  const onUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current
     if (!d || d.id !== e.pointerId) return
     drag.current = null
@@ -158,87 +172,125 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
   }, [])
 
   return (
-      <GlassScene className="scene" role="region" aria-labelledby="dock-title">
-        <div className="scene-wall" />
+    <section ref={sceneRef} className="scene" role="region" aria-labelledby="dock-title">
+      <div className="scene-wall" />
 
-        <header className="scene-top">
-          <div>
-            <p className="scene-clock">9:41</p>
-            <h2 id="dock-title" className="scene-date">
-              Thursday, 12 November · Drag the dock across the cards
-            </h2>
+      <header className="scene-top">
+        <div>
+          <p className="scene-clock">9:41</p>
+          <h2 id="dock-title" className="scene-date">
+            Thursday, 12 November · Drag the dock across the cards
+          </h2>
+        </div>
+
+        <div className="scene-controls" data-lg-ignore="">
+          <div className="dock-tint-toggle" role="group" aria-label="Dock Material fill mode">
+            <button
+              type="button"
+              className={'seg' + (alphaTinted ? ' seg--on' : '')}
+              onClick={() => setAlphaTinted(true)}
+            >
+              Alpha Tint
+            </button>
+            <button
+              type="button"
+              className={'seg' + (!alphaTinted ? ' seg--on' : '')}
+              onClick={() => setAlphaTinted(false)}
+            >
+              Transparent
+            </button>
           </div>
 
-            {/* 4 identical wrapper-mode chips → they hash equal and share ONE <filter> / 1 WebGL context. */}
-            <nav className="seg-bar" data-glass-ignore="" aria-label="Library filter">
-              {CHIPS.map((c, i) => (
-                  <LiquidGlass
-                    key={c}
-                    mode="wrapper"
-                    className="seg-chip"
-                    engine={glass.engine}
-                    strength={0.07}
-                    depth={8}
-                    blur={0}
-                    chroma={0.6}
-                    glow={0.6}
-                    {...(i === 0 ? { glow: 1 } : null)}
+          <nav className="seg-bar" aria-label="Library filter">
+            {CHIPS.map((chip) => {
+              const selected = activeChip === chip
+              return (
+                <LiquidGlass
+                  key={chip}
+                  mode="wrapper"
+                  className="seg-chip"
+                  refractionTarget={sceneRef}
+                  engine={glass.engine}
+                  strength={0.07}
+                  depth={8}
+                  blur={0}
+                  chroma={0.6}
+                  glow={selected ? 1 : 0.6}
+                  edgeHighlight={selected ? 1 : 0.65}
+                  specularAngle={glass.specularAngle}
+                >
+                  <button
+                    type="button"
+                    className={'seg-chip-btn' + (selected ? ' seg-chip-btn--on' : '')}
+                    aria-pressed={selected}
+                    onClick={() => setActiveChip(chip)}
                   >
-                    <button type="button" className="seg-chip-btn">
-                      {c}
-                    </button>
-                  </LiquidGlass>
-          ))}
-                </nav>
+                    {chip}
+                  </button>
+                </LiquidGlass>
+              )
+            })}
+          </nav>
+        </div>
       </header>
 
-            <div className="scene-cards">
-              <article className="card card--text">
-                <h3>Refraction, not blur</h3>
-                <p>
-                  Text, borders and photos behind the glass are physically bent along the bevel, with chromatic dispersion at the rim.
-                  Drag the dock over these letters or adjust the sliders to watch them warp.
-                </p>
-              </article>
-              <article className="card card--art">
-                <span className="card-badge">Now playing</span>
-                <strong>Aurora Borealis</strong>
-                <span>Hypnotic Drift · 3:42</span>
-                <div className="eq" aria-hidden="true">
-                  {Array.from({ length: 22 }, (_, i) => (
-                    <i key={i} style={{ animationDelay: `${(i * 97) % 900}ms` }} />
-                  ))}
-                </div>
-              </article>
-              <article className="card card--text card--stats">
-                <h3>60 fps</h3>
-                <p>Shared WebGL shader on Safari &amp; iOS · Shared SVG filter on Chromium — zero per-frame DOM scraping.</p>
-              </article>
-            </div>
+      <div className="scene-cards">
+        <article className="card card--text">
+          <h3>Refraction, not blur</h3>
+          <p>
+            Text, borders, and cosmic gradients behind the glass bend physically along the bevel with optional RGB
+            chromatic dispersion. Drag the dock over these cards or toggle transparent vs. alpha-tinted fill.
+          </p>
+        </article>
 
-            <p className="scene-watermark" aria-hidden="true">
-              Apple Material Layer · Real-Time Bevel Refraction
-            </p>
+        <article className="card card--art">
+          <span className="card-badge">Now playing</span>
+          <strong>Aurora Borealis</strong>
+          <span>Hypnotic Drift · 3:42</span>
+          <div className="eq" aria-hidden="true">
+            {Array.from({ length: 22 }, (_, i) => (
+              <i key={i} style={{ animationDelay: `${(i * 97) % 900}ms` }} />
+            ))}
+          </div>
+        </article>
 
-            {/* Dock: existing "Fill + Shadow" lives on the parent; Material goes inside. */}
-              <div
-                ref={dockRef}
-                data-glass-ignore=""
-                className="dock"
-                role="toolbar"
-                aria-label="Dock (drag to move, click icons to bounce)"
-                onPointerDown={onDown}
-                onPointerMove={onMove}
-                onPointerUp={onUp}
-                onPointerCancel={onUp}
-              >
-                <LiquidGlass {...glass} />
-                <div className="dock-icons">
-                  {APPS.map((a) => (
-                    <AppIcon key={a.name} app={a} />
-                  ))}
-                </div>
-              </div>
-          </GlassScene>
-          )
+        <article className="card card--text card--stats">
+          <h3>60–120 fps</h3>
+          <p>
+            1/4 quadrant SDF bitmap cache + deduplicated SVG <code>&lt;filter&gt;</code> nodes + pure GPU-composited
+            CSS optical rims &amp; volumetric glow.
+          </p>
+        </article>
+      </div>
+
+      <p className="scene-watermark" aria-hidden="true">
+        Dock → Frame → Material [LiquidGlass + Fill] → App Icons
+      </p>
+
+      {/* Exact Apple layer hierarchy: Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons */}
+      <div
+        ref={dockRef}
+        data-lg-ignore=""
+        className="dock"
+        role="toolbar"
+        aria-label="iPad Dock (drag to move, click icons to bounce)"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <div className="dock-frame">
+          <div className="dock-material" data-tinted={alphaTinted ? 'true' : 'false'}>
+            <LiquidGlass mode="layer" refractionTarget={sceneRef} {...glass} />
+          </div>
+          <div className="dock-icons">
+            {APPS.map((app) => (
+              <AppIcon key={app.name} app={app} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  )
 }
+

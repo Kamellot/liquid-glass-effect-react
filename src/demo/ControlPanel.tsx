@@ -1,19 +1,27 @@
 import { useCallback, useId } from 'react'
+import type { RefractionEngineMode, ResolvedRefractionPath } from '../glass'
 import { PRESETS, SLIDERS, type DemoParams, type SliderDef } from './presets'
-import type { GlassEngine, ResolvedEngine } from '../glass'
 
 interface Props {
   params: DemoParams
   onChange: (patch: Partial<DemoParams>) => void
-  engine: GlassEngine
-  onEngine: (e: GlassEngine) => void
-  resolvedEngine: ResolvedEngine
+  engine: RefractionEngineMode
+  onEngine: (e: RefractionEngineMode) => void
+  resolvedPath: ResolvedRefractionPath
   stats: string
   open: boolean
   onToggle: () => void
 }
 
-function Row({ def, value, onChange }: { def: SliderDef; value: number; onChange: (v: number) => void }) {
+function SliderRow({
+  def,
+  value,
+  onChange,
+}: {
+  def: SliderDef
+  value: number
+  onChange: (v: number) => void
+}) {
   const id = useId()
   const pct = ((value - def.min) / (def.max - def.min)) * 100
   return (
@@ -34,31 +42,48 @@ function Row({ def, value, onChange }: { def: SliderDef; value: number; onChange
   )
 }
 
-const ENGINES: { id: GlassEngine; label: string }[] = [
+const ENGINES: { id: RefractionEngineMode; label: string }[] = [
   { id: 'auto', label: 'Auto' },
-  { id: 'webgl', label: 'WebGL' },
-  { id: 'svg', label: 'SVG' },
-  { id: 'fallback', label: 'CSS Ring' },
+  { id: 'backdrop', label: 'SVG Backdrop' },
+  { id: 'target', label: 'Target Filter' },
+  { id: 'css', label: 'CSS Optics' },
 ]
 
-const PATH_LABELS: Record<ResolvedEngine, string> = {
-  svg: 'backdrop-filter: url(#svg)',
-  webgl: 'WebGL SDF shader (Safari / iOS)',
-  fallback: 'CSS dual bevel-ring',
+const PATH_LABELS: Record<ResolvedRefractionPath, string> = {
+  'backdrop-svg': 'backdrop-filter: url(#svg)',
+  'target-svg': 'filter: url(#svg) on target layer',
+  'css-optics': 'CSS optical layer only',
 }
 
-export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngine, stats, open, onToggle }: Props) {
-  const set = useCallback((key: keyof DemoParams) => (v: number) => onChange({ [key]: v }), [onChange])
+export function ControlPanel({
+  params,
+  onChange,
+  engine,
+  onEngine,
+  resolvedPath,
+  stats,
+  open,
+  onToggle,
+}: Props) {
+  const setParam = useCallback(
+    (key: keyof DemoParams) => (val: number) => onChange({ [key]: val }),
+    [onChange],
+  )
   const left = SLIDERS.slice(0, 5)
   const right = SLIDERS.slice(5)
 
   return (
-    <aside className={'cp' + (open ? '' : ' cp--closed')} aria-label="Liquid glass controls">
+    <aside className={'cp' + (open ? '' : ' cp--closed')} aria-label="Liquid glass inspector">
       <div className="cp-head">
-        <div className="cp-presets" role="group" aria-label="Presets">
-          {PRESETS.map((p) => (
-            <button key={p.name} type="button" className="chip" onClick={() => onChange(p.params)}>
-              {p.name}
+        <div className="cp-presets" role="group" aria-label="Optical presets">
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              className="chip"
+              onClick={() => onChange(preset.params)}
+            >
+              {preset.name}
             </button>
           ))}
         </div>
@@ -71,26 +96,32 @@ export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngin
         <>
           <div className="cp-grid">
             <div className="cp-col">
-              {left.map((d) => (
-                <Row key={d.key} def={d} value={params[d.key]} onChange={set(d.key)} />
+              {left.map((def) => (
+                <SliderRow key={def.key} def={def} value={params[def.key]} onChange={setParam(def.key)} />
               ))}
             </div>
             <div className="cp-col">
-              {right.map((d) => (
-                <Row key={d.key} def={d} value={params[d.key]} onChange={set(d.key)} />
+              {right.map((def) => (
+                <SliderRow key={def.key} def={def} value={params[def.key]} onChange={setParam(def.key)} />
               ))}
             </div>
           </div>
+
           <div className="cp-foot">
-            <div className="cp-engine" role="group" aria-label="Rendering engine">
-              {ENGINES.map((e) => (
-                <button key={e.id} type="button" className={'seg' + (engine === e.id ? ' seg--on' : '')} onClick={() => onEngine(e.id)}>
-                  {e.label}
+            <div className="cp-engine" role="group" aria-label="Refraction path">
+              {ENGINES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={'seg' + (engine === item.id ? ' seg--on' : '')}
+                  onClick={() => onEngine(item.id)}
+                >
+                  {item.label}
                 </button>
               ))}
             </div>
             <span className="cp-stat">
-              path: <b>{PATH_LABELS[resolvedEngine]}</b>
+              path: <b>{PATH_LABELS[resolvedPath]}</b>
             </span>
             <span className="cp-stat">{stats}</span>
           </div>
@@ -99,3 +130,4 @@ export function ControlPanel({ params, onChange, engine, onEngine, resolvedEngin
     </aside>
   )
 }
+

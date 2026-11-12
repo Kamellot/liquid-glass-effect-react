@@ -1,62 +1,70 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, ReactNode, RefObject } from 'react'
 
-/** auto = SVG backdrop-filter where supported, else WebGL (inside a <GlassScene>), else CSS ring. */
-export type GlassEngine = 'auto' | 'svg' | 'webgl' | 'fallback'
-
-/** Optical parameters shared by the component, the map generator and the filter registry. */
-export interface OpticalParams {
-  /** Refraction intensity, 0–0.2. Becomes the `scale` of `feDisplacementMap`. */
-  strength: number
-  /** Lens surface profile, 0–1. Higher = squarer (more "squircle") bevel. */
-  curvature: number
-  /** Bevel thickness, 1–50 (scaled relative to the element's size). */
-  depth: number
-  /** Falloff spread of the edge normals, 0–1. */
-  splay: number
-  /** Chromatic aberration, 0–1. 0 disables the 3-channel split entirely. */
-  chroma: number
-  /** Frosted blur in px, 0–20. */
-  blur: number
-}
-
-export interface LightingParams {
-  /** Crisp 1px rim highlight intensity, 0–1. */
-  edgeHighlight: number
-  /** Inner specular glow intensity, 0–1. */
-  glow: number
-  /** Light direction in degrees (0 = top, clockwise). */
-  specularAngle: number
-}
-
-export interface LiquidGlassProps extends Partial<OpticalParams>, Partial<LightingParams> {
-  /**
-   * Standalone circular lens diameter in px. When omitted the component measures
-   * its parent (layer mode) / itself (wrapper mode) with a ResizeObserver.
-   */
+/** Optical and geometric parameters for `<LiquidGlass />`. */
+export interface LiquidGlassOptions {
+  /** Explicit square diameter (px) for standalone lenses; omitted when auto-measuring parent/content. */
   size?: number
-  /**
-   * `layer`  – aria-hidden material node, absolutely fills the parent (default).
-   * `wrapper` – container element that renders `children` above the glass.
-   */
-  mode?: 'layer' | 'wrapper'
-  /** Override the corner radius (px or any CSS length). Defaults to the inherited radius. */
-  borderRadius?: number | string
-  /** Force a rendering path. `auto` = feature + engine detection. */
-  engine?: GlassEngine
+  /** Displacement strength multiplier (0.000 to 0.200). */
+  strength?: number
+  /** Bevel curvature / refractive steepness (0.00 to 1.00). */
+  curvature?: number
+  /** Bevel thickness inward from the border in pixels (1 to 50). */
+  depth?: number
+  /** How broadly refraction splays across the bevel depth (0.00 to 1.00). */
+  splay?: number
+  /** Chromatic RGB dispersion split intensity (0.00 to 1.00). */
+  chroma?: number
+  /** Hardware-accelerated backdrop blur in pixels (0.0 to 20.0). */
+  blur?: number
+  /** Specular 1.5px border rim intensity (0.00 to 1.00). */
+  edgeHighlight?: number
+  /** Directional inner volumetric glow + radial surface sheen (0.00 to 1.00). */
+  glow?: number
+  /** Specular light source azimuth in degrees (0 to 360). */
+  specularAngle?: number
+}
+
+export type LiquidGlassMode = 'layer' | 'wrapper'
+
+export type RefractionEngineMode = 'auto' | 'backdrop' | 'target' | 'css'
+
+export type ResolvedRefractionPath = 'backdrop-svg' | 'target-svg' | 'css-optics'
+
+export interface DisplacementMapInfo {
+  filterId: string | null
+  dataUrl: string | null
+  width: number
+  height: number
+  borderRadius: number
+  hash: string
+}
+
+export interface LiquidGlassProps extends LiquidGlassOptions {
+  /** Integration pattern: Apple Material 'layer' (default) or 'wrapper'. */
+  mode?: LiquidGlassMode
+  /** Target layer element/ref for cross-browser SVG filter refraction (Chrome, Firefox, Safari). */
+  refractionTarget?: RefObject<HTMLElement | null> | HTMLElement | null
+  /** Refraction execution strategy; 'auto' picks native backdrop SVG on Chromium and target SVG on Safari/Firefox. */
+  engine?: RefractionEngineMode
+  /** Optional children (used in 'wrapper' mode). */
+  children?: ReactNode
   className?: string
   style?: CSSProperties
-  children?: ReactNode
+  /** Callback invoked when the displacement map or filter updates (useful for debug previews). */
+  onMapUpdate?: (info: DisplacementMapInfo) => void
 }
 
-export const DEFAULTS = {
+export const DEFAULT_LENS_SIZE = 166
+
+export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size'>> = {
   strength: 0.08,
   curvature: 0.99,
   depth: 4,
   splay: 0.76,
-  chroma: 1,
-  blur: 0,
-  edgeHighlight: 1,
-  glow: 1,
+  chroma: 1.0,
+  blur: 0.0,
+  edgeHighlight: 1.0,
+  glow: 1.0,
   specularAngle: 71,
-} as const
+}
 
