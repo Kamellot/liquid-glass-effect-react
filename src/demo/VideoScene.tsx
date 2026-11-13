@@ -52,10 +52,31 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const scrubberRef = useRef<HTMLDivElement>(null)
   const scrubbing = useRef<number | null>(null)
+  const hideTimerRef = useRef<number>(0)
 
   const [playing, setPlaying] = useState(true)
   const [progress, setProgress] = useState(0.24)
-  const [duration, setDuration] = useState(45)
+  const [duration, setDuration] = useState(21)
+  const [controlsVisible, setControlsVisible] = useState(false)
+
+  const clearHideTimer = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = 0
+    }
+  }, [])
+
+  const showControlsWithTimeout = useCallback(() => {
+    setControlsVisible(true)
+    clearHideTimer()
+    hideTimerRef.current = setTimeout(() => {
+      if (scrubbing.current === null) {
+        setControlsVisible(false)
+      }
+    }, 5000) as unknown as number
+  }, [clearHideTimer])
+
+  useEffect(() => clearHideTimer, [clearHideTimer])
 
   useEffect(() => {
     const v = videoRef.current
@@ -138,28 +159,32 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
     }
   }
 
+  const rawDepth = glass.depth ?? 30
+  const rawSplay = glass.splay ?? 20
+  // Keep circular video orbs full-dome (depth = radius) whenever depth > 0 so there is never an inner
+  // canvas-vs-video seam circle, while mapping lower Depth values to a steeper outer-rim falloff.
+  const orbSplay = rawDepth < 30 ? Math.max(0, rawSplay * (rawDepth / 30)) : rawSplay
+  const orbRefraction =
+    rawDepth <= 0 ? 0 : Math.round((glass.refraction ?? 70) * (0.45 + 0.55 * Math.min(1, rawDepth / 25)))
+
   const playOrbGlass: LiquidGlassProps = {
     ...glass,
-    refraction: Math.max(glass.refraction ?? 70, 72),
-    depth: 52,
-    frost: Math.min(glass.frost ?? 6, 8),
-    lightIntensity: Math.max(glass.lightIntensity ?? 40, 48),
+    refraction: orbRefraction,
+    depth: rawDepth <= 0 ? 0 : 52,
+    splay: orbSplay,
   }
 
   const skipOrbGlass: LiquidGlassProps = {
     ...glass,
-    refraction: Math.max(glass.refraction ?? 70, 72),
-    depth: 34,
-    frost: Math.min(glass.frost ?? 6, 8),
-    lightIntensity: Math.max(glass.lightIntensity ?? 40, 48),
+    refraction: orbRefraction,
+    depth: rawDepth <= 0 ? 0 : 34,
+    splay: orbSplay,
   }
 
   const barGlass: LiquidGlassProps = {
     ...glass,
-    refraction: Math.max(glass.refraction ?? 70, 58),
-    depth: Math.min(Math.max(glass.depth ?? 30, 18), 22),
-    frost: Math.max(glass.frost ?? 6, 10),
-    lightIntensity: Math.max(glass.lightIntensity ?? 40, 44),
+    depth: rawDepth <= 0 ? 0 : 21,
+    splay: orbSplay,
   }
 
   return (
@@ -170,12 +195,26 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             Live Video &amp; Floating Liquid Controls
           </h2>
           <p className="video-sub">
-            Playback orbs and the timeline scrubber refract live <code>&lt;video&gt;</code> frames in real time.
+            Hover the video to reveal playback orbs and timeline scrubber; controls auto-hide after 5s of inactivity and respond to all settings sliders.
           </p>
         </div>
       </div>
 
-      <div ref={stageRef} className="video-stage">
+      <div
+        ref={stageRef}
+        className="video-stage"
+        data-controls-visible={controlsVisible ? 'true' : 'false'}
+        onPointerEnter={showControlsWithTimeout}
+        onPointerMove={showControlsWithTimeout}
+        onPointerDown={showControlsWithTimeout}
+        onPointerLeave={() => {
+          clearHideTimer()
+          if (scrubbing.current === null) {
+            setControlsVisible(false)
+          }
+        }}
+        onFocus={showControlsWithTimeout}
+      >
         <video
           ref={videoRef}
           className="video-media"

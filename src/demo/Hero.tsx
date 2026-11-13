@@ -115,7 +115,7 @@ export function Hero({ lens }: HeroProps) {
       ? 0
       : Math.min(
           Math.round(lens.size * 0.5),
-          Math.max(rawDepth, Math.round(Math.pow(rawDepth / 100, 0.6) * (lens.size * 0.5) * 1.32)),
+          Math.max(rawDepth, Math.round(Math.pow(rawDepth / 100, 0.45) * (lens.size * 0.5) * 1.72)),
         )
 
   return (
