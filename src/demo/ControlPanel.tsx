@@ -1,12 +1,9 @@
 import { useCallback, useId } from 'react'
-import type { SpecularMode } from '../glass'
 import { PRESETS, SLIDERS, type DemoParams, type SliderDef } from './presets'
 
 interface Props {
   params: DemoParams
   onChange: (patch: Partial<DemoParams>) => void
-  specularMode: SpecularMode
-  onSpecularMode: (mode: SpecularMode) => void
   stats: string
   open: boolean
   onToggle: () => void
@@ -28,7 +25,6 @@ function SliderRow({
   return (
       <div
         className={'cp-row' + (disabled ? ' cp-row--dim' : '')}
-        title={disabled ? 'Switch Shine to Directional to adjust angle' : undefined}
       >
         <label htmlFor={id}>{def.label}</label>
         <input
@@ -47,16 +43,9 @@ function SliderRow({
       )
 }
 
-const SHINE_MODES: {id: SpecularMode; label: string }[] = [
-      {id: 'directional', label: 'Directional' },
-      {id: 'apple', label: 'Apple Official' },
-      ]
-
       export function ControlPanel({
         params,
         onChange,
-        specularMode,
-        onSpecularMode,
         stats,
         open,
         onToggle,
@@ -65,8 +54,9 @@ const SHINE_MODES: {id: SpecularMode; label: string }[] = [
     (key: keyof DemoParams) => (val: number) => onChange({[key]: val }),
       [onChange],
       )
-      const left = SLIDERS.slice(0, 5)
-      const right = SLIDERS.slice(5)
+      const half = Math.ceil(SLIDERS.length / 2)
+      const left = SLIDERS.slice(0, half)
+      const right = SLIDERS.slice(half)
 
       return (
       <aside className={'cp' + (open ? '' : ' cp--closed')} aria-label="Liquid glass inspector">
@@ -98,31 +88,12 @@ const SHINE_MODES: {id: SpecularMode; label: string }[] = [
               </div>
               <div className="cp-col">
                 {right.map((def) => (
-                <SliderRow
-                  key={def.key}
-                  def={def}
-                  value={params[def.key]}
-                  disabled={def.key === 'specularAngle' && specularMode === 'apple'}
-                  onChange={setParam(def.key)}
-                />
+                <SliderRow key={def.key} def={def} value={params[def.key]} onChange={setParam(def.key)} />
                 ))}
               </div>
             </div>
 
             <div className="cp-foot">
-              <div className="cp-shine" role="group" aria-label="Specular shine style">
-                <span className="cp-foot-label">Shine:</span>
-                {SHINE_MODES.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className={'seg' + (specularMode === m.id ? ' seg--on' : '')}
-                    onClick={() => onSpecularMode(m.id)}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
               <span className="cp-stat">
                 engine: <b>Custom 1/4-SDF Canvas + CSS Optics</b>
               </span>

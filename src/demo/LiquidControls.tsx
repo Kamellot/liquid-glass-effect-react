@@ -127,16 +127,13 @@ export function LiquidSwitch({
         <LiquidGlass
           mode="layer"
           refractionTarget={refractionTarget}
-          strength={Math.max(glass.strength ?? 0.08, 0.14)}
-          curvature={0.96}
+          refraction={Math.max(glass.refraction ?? 70, 85)}
           depth={8}
-          splay={0.86}
-          chroma={Math.max(glass.chroma ?? 0.85, 0.85)}
-          blur={Math.min(glass.blur ?? 0, 1.5)}
-          edgeHighlight={Math.max(glass.edgeHighlight ?? 0.9, 0.95)}
-          glow={Math.max(glass.glow ?? 0.8, 0.95)}
-          specularAngle={glass.specularAngle}
-          specularMode={glass.specularMode}
+          splay={60}
+          dispersion={Math.max(glass.dispersion ?? 20, 25)}
+          frost={Math.min(glass.frost ?? 0, 10)}
+          lightAngle={glass.lightAngle}
+          lightIntensity={Math.max(glass.lightIntensity ?? 40, 60)}
         />
       </span>
     </button>
@@ -272,16 +269,13 @@ export function LiquidSegmentedControl<T extends string>({
           mode="layer"
           refractionTarget={refractionTarget}
           tint={tint}
-          strength={Math.max(glass.strength ?? 0.08, 0.13)}
-          curvature={0.96}
+          refraction={Math.max(glass.refraction ?? 70, 80)}
           depth={10}
-          splay={0.85}
-          chroma={Math.max(glass.chroma ?? 0.85, 0.85)}
-          blur={0}
-          edgeHighlight={Math.max(glass.edgeHighlight ?? 0.9, 0.95)}
-          glow={Math.max(glass.glow ?? 0.8, 0.95)}
-          specularAngle={glass.specularAngle}
-          specularMode={glass.specularMode}
+          splay={60}
+          dispersion={Math.max(glass.dispersion ?? 20, 25)}
+          frost={0}
+          lightAngle={glass.lightAngle}
+          lightIntensity={Math.max(glass.lightIntensity ?? 40, 60)}
         />
       </div>
       {options.map((option) => {

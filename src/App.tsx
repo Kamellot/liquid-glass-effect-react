@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
-import { getEngineStats, subscribeEngineStats, type EngineStats, type SpecularMode } from './glass'
+import { getEngineStats, subscribeEngineStats, type EngineStats } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
@@ -9,7 +9,6 @@ const SERVER_STATS: EngineStats = { fields: 0, consumers: 0, bitmaps: 0, snapsho
 
 export default function App() {
   const [params, setParams] = useState<DemoParams>(DEFAULT_PARAMS)
-  const [specularMode, setSpecularMode] = useState<SpecularMode>('directional')
   const [panelOpen, setPanelOpen] = useState(
     () => typeof window !== 'undefined' && !window.matchMedia('(max-width: 860px)').matches,
   )
@@ -27,8 +26,8 @@ export default function App() {
       : 'CSS optical layer'
 
   const { size, ...optics } = params
-  const lens = { ...optics, size, specularMode }
-  const dock = { ...optics, specularMode }
+  const lens = { ...optics, size }
+  const dock = { ...optics }
 
   return (
     <>
@@ -49,7 +48,7 @@ export default function App() {
           <p>
             Universal cross-browser architecture: <code>domSnapshot.ts</code> + <code>refractionEngine.ts</code> sample a
             1/4-quadrant symmetric SDF bevel field directly on <code>&lt;canvas&gt;</code> (working identically on Chrome iOS,
-            Safari, Firefox, and Desktop), while blur, 1.5px specular rim, and volumetric glow run in GPU-composited CSS.
+            Safari, Firefox, and Desktop), while frost, the 1px directional specular rim, and inner reflection run in GPU-composited CSS.
           </p>
         </footer>
       </div>
@@ -57,8 +56,6 @@ export default function App() {
       <ControlPanel
         params={params}
         onChange={patch}
-        specularMode={specularMode}
-        onSpecularMode={setSpecularMode}
         stats={statsLabel}
         open={panelOpen}
         onToggle={() => setPanelOpen((o) => !o)}

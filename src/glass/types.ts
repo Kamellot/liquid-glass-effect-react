@@ -1,39 +1,39 @@
 import type { CSSProperties, ReactNode, RefObject } from 'react'
 
-/** Optical and geometric parameters for `<LiquidGlass />`. */
+/**
+ * Optical and geometric parameters for `<LiquidGlass />`.
+ * All optical values use the same 0–100 scale as native Apple / Figma "Glass" panels.
+ */
 export interface LiquidGlassOptions {
   /** Explicit square diameter (px) for standalone lenses; omitted when auto-measuring parent/content. */
   size?: number
-  /** Displacement strength multiplier (0.000 to 0.200). */
-  strength?: number
-  /** Bevel curvature / refractive steepness (0.00 to 1.00). */
-  curvature?: number
-  /** Bevel thickness inward from the border in pixels (1 to 100). */
+  /** Strength of edge light bending (0–100, default 70). Scales the rim pull distance, like feDisplacementMap `scale`. */
+  refraction?: number
+  /** Physical bevel/rim width in px measured from the outer edge inward (0–100, default 30). */
   depth?: number
-  /** How broadly refraction splays across the bevel depth (0.00 to 1.00). */
+  /** Chromatic dispersion: RGB channel separation, confined to the curved bevel (0–100, default 20). */
+  dispersion?: number
+  /** Frosted surface diffusion: blur plus a subtle saturation boost (0–100, default 6). */
+  frost?: number
+  /** Falloff smoothness: how gently the bent rim eases into the flat center (0–100, default 20). */
   splay?: number
-  /** Chromatic RGB dispersion split intensity (0.00 to 1.00). */
-  chroma?: number
-  /** Hardware-accelerated backdrop blur in pixels (0.0 to 20.0). */
-  blur?: number
-  /** Specular 1.5px border rim intensity (0.00 to 1.00). */
-  edgeHighlight?: number
-  /** Directional inner volumetric glow + radial surface sheen (0.00 to 1.00). */
-  glow?: number
-  /** Specular light source azimuth in degrees (0 to 360). */
-  specularAngle?: number
-  /** Specular shine style: rotating 'directional' conic/angled highlight or uniform top/bottom 'apple' rim. */
-  specularMode?: SpecularMode
+  /** Light source direction in degrees, 0 = light from the top (0–360, default 0). */
+  lightAngle?: number
+  /** Brightness of the directional specular rim and subtle inner reflection (0–100, default 40). */
+  lightIntensity?: number
+  /**
+   * Corner radius. Number = px, string = any CSS radius (`'24px'`, `'50%'`).
+   * Omit to inherit the parent's radius.
+   */
+  borderRadius?: number | string
   /** Optional UI background color/tint fill applied seamlessly across interior and refracted bevel. */
   tint?: string
 }
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
 
-export type SpecularMode = 'directional' | 'apple'
-
 export interface DisplacementMapInfo {
-  /** Shared cached bevel field revision identifier (e.g. `lg-b1`), or `null` when strength is 0. */
+  /** Shared cached bevel field revision identifier (e.g. `lg-b1`), or `null` when refraction is 0. */
   fieldId: string | null
   dataUrl: string | null
   width: number
@@ -57,15 +57,12 @@ export interface LiquidGlassProps extends LiquidGlassOptions {
 
 export const DEFAULT_LENS_SIZE = 166
 
-export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size' | 'tint'>> = {
-  strength: 0.08,
-  curvature: 0.99,
-  depth: 18,
-  splay: 0.76,
-  chroma: 1.0,
-  blur: 0.0,
-  edgeHighlight: 1.0,
-  glow: 1.0,
-  specularAngle: 71,
-  specularMode: 'directional',
+export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size' | 'tint' | 'borderRadius'>> = {
+  refraction: 70,
+  depth: 30,
+  dispersion: 20,
+  frost: 6,
+  splay: 20,
+  lightAngle: 0,
+  lightIntensity: 40,
 }

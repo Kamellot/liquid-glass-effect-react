@@ -4,12 +4,16 @@ import { getSnapshotCount, subscribeSnapshotStats } from './domSnapshot'
 const MAX_BITMAP_CACHE = 64
 const MAX_BEVEL_BUDGET = 72_000
 
+/** Superellipse exponent of the corner distance metric (2 = circle, ∞ = square; 2.8 ≈ continuous-curvature squircle). */
+const SQUIRCLE_EXPONENT = 2.8
+
 export interface DisplacementMapSpec {
   width: number
   height: number
   borderRadius: number
+  /** Bevel width in px (0–100). */
   depth: number
-  curvature: number
+  /** Falloff smoothness (0–100). */
   splay: number
 }
 
@@ -24,7 +28,6 @@ export interface BevelField {
   height: number
   borderRadius: number
   effectiveDepth: number
-  maxRadialSlope: number
   scale: number
   bufWidth: number
   bufHeight: number
@@ -139,7 +142,6 @@ function normalizeMapSpec(spec: DisplacementMapSpec): {
   h: number
   r: number
   depth: number
-  curvature: number
   splay: number
   key: string
 } {
@@ -147,11 +149,10 @@ function normalizeMapSpec(spec: DisplacementMapSpec): {
   const h = Math.max(2, Math.round(spec.height))
   const maxR = Math.min(w, h) * 0.5
   const r = Math.round(clamp(spec.borderRadius, 0, maxR) * 2) / 2
-  const depth = clamp(spec.depth, 1, 100)
-  const curvature = clamp01(spec.curvature)
-  const splay = clamp01(spec.splay)
-  const key = `${w}x${h}_r${r.toFixed(1)}_d${depth.toFixed(1)}_c${curvature.toFixed(3)}_s${splay.toFixed(3)}`
-  return { w, h, r, depth, curvature, splay, key }
+  const depth = clamp(spec.depth, 0, 100)
+  const splay = clamp(spec.splay, 0, 100)
+  const key = `${w}x${h}_r${r.toFixed(1)}_d${depth.toFixed(1)}_s${splay.toFixed(1)}`
+  return { w, h, r, depth, splay, key }
 }
 
 export function buildBevelHash(spec: BevelSpec): string {
@@ -162,7 +163,7 @@ export function buildBevelHash(spec: BevelSpec): string {
 
 export function chooseRenderScale(width: number, height: number, depth: number): number {
   const maxDpr = typeof window !== 'undefined' ? clamp(window.devicePixelRatio || 1, 1, 2) : 1
-  const effectiveDepth = clamp(depth, 1, Math.min(width, height) * 0.5)
+  const effectiveDepth = clamp(depth, 0, Math.min(width, height) * 0.5)
   const approxBevelPx = Math.min(width * height, 2 * (width + height) * effectiveDepth)
   const bounded = Math.sqrt(MAX_BEVEL_BUDGET / Math.max(1, approxBevelPx))
   const raw = clamp(bounded, 1, maxDpr)
@@ -176,101 +177,104 @@ interface BevelCurveParams {
   by: number
   r: number
   effectiveDepth: number
-  splayExp: number
-  sinMax: number
-  tanMaxDelta: number
-  curvGain: number
-  maxRadialSlope: number
+  /** Exponent of the rim falloff `(1 - t)^p`; lower = broader, gentler transition into the flat center. */
+  falloffExp: number
+  /** Width (px) over which corner contours morph from the visible CSS arc into the squircle metric. */
+  blendSpan: number
 }
 
-function evalBevelMagnitude(u: number, sinMax: number, tanMaxDelta: number, curvGain: number, splayExp: number): number {
-  // C² sine-dome guarantees zero slope & zero curvature at u = 0 and smoothly cushions rim Snell growth
-  const uSplayed = Math.pow(Math.sin(u * Math.PI * 0.5), splayExp)
-  const sinI = uSplayed * sinMax
-  const delta = Math.asin(sinI) - Math.asin(sinI / 1.52)
-  return (Math.tan(delta) / tanMaxDelta) * curvGain
+function smooth01(v: number): number {
+  const t = clamp01(v)
+  return t * t * (3 - 2 * t)
 }
 
-function makeBevelCurveParams(
-  w: number,
-  h: number,
-  r: number,
-  depth: number,
-  curvature: number,
-  splay: number,
-): BevelCurveParams {
+/**
+ * Rim falloff: 1 at the outer edge (t = 0), 0 with zero slope at t = 1 (the inner bevel boundary).
+ * `splay` (0–100) lowers the exponent from 3.5 to 2.0 so the bent rim eases into the flat
+ * center more gently. Exponent ≥ 2 keeps the profile C¹ at the center boundary, so nothing steps.
+ */
+function evalRimProfile(t: number, falloffExp: number): number {
+  return Math.pow(1 - clamp01(t), falloffExp)
+}
+
+function makeBevelCurveParams(w: number, h: number, r: number, depth: number, splay: number): BevelCurveParams {
   const hw = w * 0.5
   const hh = h * 0.5
   const bx = Math.max(0, hw - r)
   const by = Math.max(0, hh - r)
-  const effectiveDepth = Math.max(1, Math.min(depth, Math.min(hw, hh)))
-  // Cushioned C² sine-dome power balances center dome smoothness with crisp outer rim bend
-  const splayExp = 3.2 - 1.2 * splay
-  // Keep peak incident sine bounded below total internal grazing so Snell refraction stays fluid without rim spikes
-  const sinMax = 0.25 + 0.58 * curvature
-  const maxDelta = Math.asin(sinMax) - Math.asin(sinMax / 1.52)
-  const tanMaxDelta = Math.tan(maxDelta)
-  const curvGain = curvature > 0 ? Math.pow(curvature, 0.7) : 0
-
-  // Precompute peak normalized radial derivative so renderRefractedBevel can enforce fold-free refraction
-  let maxRadialSlope = 0.25
-  if (curvGain > 0) {
-    const du = 1 / 256
-    let prev = 0
-    for (let i = 1; i <= 256; i++) {
-      const cur = evalBevelMagnitude(i * du, sinMax, tanMaxDelta, curvGain, splayExp)
-      const slope = (cur - prev) / du
-      if (slope > maxRadialSlope) maxRadialSlope = slope
-      prev = cur
-    }
-  }
-
-  return { hw, hh, bx, by, r, effectiveDepth, splayExp, sinMax, tanMaxDelta, curvGain, maxRadialSlope }
+  const effectiveDepth = Math.max(0, Math.min(depth, Math.min(hw, hh)))
+  const falloffExp = 3.5 - 1.5 * (clamp(splay, 0, 100) / 100)
+  const blendSpan = Math.max(1, Math.min(r, effectiveDepth) * 0.75)
+  return { hw, hh, bx, by, r, effectiveDepth, falloffExp, blendSpan }
 }
 
 /**
- * Shared 1/4-quadrant SDF + Snell's law bevel kernel.
+ * Shared 1/4-quadrant SDF + rim-pull kernel.
  * Evaluates a point `(cx >= 0, cy >= 0)` relative to center in top-left quadrant coordinates.
+ *
+ * - Straight edges: plain axis distance.
+ * - Corners: superellipse (squircle) metric `(|dx|^2.8 + |dy|^2.8)^(1/2.8)` so curvature flows
+ *   continuously from edge into corner. The metric is blended in from the visible CSS arc
+ *   (weight 0 at the outer edge) so the bevel zero-contour always coincides with the real
+ *   `border-radius` clip, while deeper contours and normals follow the squircle.
+ * - Displacement points OUTWARD (samples beyond the rim), pulling adjacent background onto the bevel.
+ * - Beyond `depth` there is no entry at all: neutral displacement, untouched center.
  */
 function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSample | null {
-  if (p.curvGain <= 0) return null
+  if (p.effectiveDepth <= 0.5) return null
 
   const qx = cx - p.bx
   const qy = cy - p.by
   const ox = qx > 0 ? qx : 0
   const oy = qy > 0 ? qy : 0
-  const outLen = Math.hypot(ox, oy)
-  const sd = outLen + Math.min(Math.max(qx, qy), 0) - p.r
+
+  let sd: number
+  let ux = 0
+  let uy = 0
+
+  if (ox > 0 && oy > 0) {
+    const e = Math.hypot(ox, oy)
+    const n = SQUIRCLE_EXPONENT
+    const nrm = Math.pow(Math.pow(ox, n) + Math.pow(oy, n), 1 / n)
+    const lam = smooth01((p.r - e) / p.blendSpan)
+    sd = e * Math.pow(nrm / e, lam) - p.r
+
+    // Outward unit normal: circle normal morphing into the squircle gradient
+    const gx = Math.pow(ox, n - 1)
+    const gy = Math.pow(oy, n - 1)
+    const gl = Math.hypot(gx, gy)
+    ux = (1 - lam) * (ox / e) + lam * (gx / gl)
+    uy = (1 - lam) * (oy / e) + lam * (gy / gl)
+    const ul = Math.hypot(ux, uy) || 1
+    ux /= ul
+    uy /= ul
+  } else {
+    sd = Math.max(ox, oy) + Math.min(Math.max(qx, qy), 0) - p.r
+    if (ox > 0) ux = 1
+    else if (oy > 0) uy = 1
+    else if (qx > qy) ux = 1
+    else if (qy > qx) uy = 1
+    else {
+      ux = Math.SQRT1_2
+      uy = Math.SQRT1_2
+    }
+  }
 
   if (sd > 0.75) return null
   const distInward = sd < 0 ? -sd : 0
   if (distInward >= p.effectiveDepth) return null
 
   const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
-  const u = clamp01(1 - distInward / p.effectiveDepth)
-  // Subtle inner feather over the first 8% avoids a 1px stair-step where displacement begins
-  const tAlpha = clamp01(u / 0.08)
-  const innerAlpha = tAlpha * tAlpha * (3 - 2 * tAlpha)
+  const t = distInward / p.effectiveDepth
+  // Tiny feather over the last 8% of the bevel hides any 1px stair-step where displacement ends
+  const innerAlpha = smooth01((1 - t) / 0.08)
+  const mag = evalRimProfile(t, p.falloffExp)
 
-  const mag = evalBevelMagnitude(u, p.sinMax, p.tanMaxDelta, p.curvGain, p.splayExp) * outerAlpha
-
-  let nx = 0
-  let ny = 0
-  if (outLen > 1e-6) {
-    nx = -ox / outLen
-    ny = -oy / outLen
-  } else if (qx > qy) {
-    nx = -1
-  } else if (qy > qx) {
-    ny = -1
-  } else {
-    nx = -Math.SQRT1_2
-    ny = -Math.SQRT1_2
-  }
-
+  // Quadrant coordinates grow toward the outer edge, which is -x/-y in top-left screen space.
+  // Sampling along the outward normal pulls outside content inward onto the rim.
   return {
-    dx: -nx * mag,
-    dy: -ny * mag,
+    dx: -ux * mag,
+    dy: -uy * mag,
     outerAlpha,
     innerAlpha,
   }
@@ -281,7 +285,7 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
  * and mirrors pixels into all four quadrants (R = ΔX, G = ΔY, 128 = neutral).
  */
 export function generateDisplacementMap(spec: DisplacementMapSpec): string {
-  const { w, h, r, depth, curvature, splay, key } = normalizeMapSpec(spec)
+  const { w, h, r, depth, splay, key } = normalizeMapSpec(spec)
 
   const cached = bitmapCache.get(key)
   if (cached) {
@@ -296,7 +300,7 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   const { canvas, ctx } = surface
   const imageData = ctx.createImageData(w, h)
   const data = imageData.data
-  const curve = makeBevelCurveParams(w, h, r, depth, curvature, splay)
+  const curve = makeBevelCurveParams(w, h, r, depth, splay)
 
   const qW = Math.ceil(w * 0.5)
   const qH = Math.ceil(h * 0.5)
@@ -355,11 +359,11 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
 }
 
 function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelField {
-  const { w, h, r, depth, curvature, splay } = normalizeMapSpec(spec)
+  const { w, h, r, depth, splay } = normalizeMapSpec(spec)
   const scale = clamp(spec.scale, 1, 2)
   const bufWidth = Math.max(2, Math.round(w * scale))
   const bufHeight = Math.max(2, Math.round(h * scale))
-  const curve = makeBevelCurveParams(w, h, r, depth, curvature, splay)
+  const curve = makeBevelCurveParams(w, h, r, depth, splay)
 
   const qW = Math.ceil(bufWidth * 0.5)
   const qH = Math.ceil(bufHeight * 0.5)
@@ -414,7 +418,6 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
     height: h,
     borderRadius: r,
     effectiveDepth: curve.effectiveDepth,
-    maxRadialSlope: curve.maxRadialSlope,
     scale,
     bufWidth,
     bufHeight,
@@ -491,7 +494,15 @@ function sampleChannel(
 
 /**
  * Renders only the displaced 1/4-mirrored bevel ring into `outImageData` by bilinearly
- * sampling `snapshot.data` with optional chromatic R/G/B dispersion.
+ * sampling `snapshot.data`. This is the refraction stage of the pipeline: it runs FIRST,
+ * and the CSS `frost` backdrop blur is composited on top afterwards.
+ *
+ * - `refraction` (0–100): peak rim pull = `refraction / 100 × bevel depth` px.
+ * - `dispersion` (0–100): R/B channels sample at ±`dispersion × 0.5 %` of that pull, so the
+ *   split is zero in the flat center and grows only along the curved bevel.
+ *
+ * Because the displacement points outward and its magnitude falls monotonically inward, the
+ * sample position is strictly increasing across the bevel: it can never fold or tear.
  */
 export function renderRefractedBevel(
   ctx: CanvasRenderingContext2D,
@@ -500,20 +511,14 @@ export function renderRefractedBevel(
   snapshot: TargetSnapshot,
   offsetX: number,
   offsetY: number,
-  strength: number,
-  chroma: number,
+  refraction: number,
+  dispersion: number,
 ): void {
   const outData = outImageData.data
   const out32 = new Uint32Array(outData.buffer)
   out32.fill(0)
 
-  const rawDisp = clamp(strength, 0, 0.2) * Math.min(field.width, field.height) * 0.85
-  // Asymptotic soft knee anchored to the curve's peak radial slope prevents caustic folds at any slider combo
-  const hardLimit = (field.effectiveDepth * 0.98) / field.maxRadialSlope
-  const kneeStart = hardLimit * 0.85
-  const excess = rawDisp - kneeStart
-  const headroom = hardLimit - kneeStart
-  const dispCssPx = rawDisp <= kneeStart ? rawDisp : kneeStart + (headroom * excess) / (headroom + excess)
+  const dispCssPx = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth
   if (dispCssPx <= 0.001 || field.count === 0) {
     ctx.putImageData(outImageData, 0, 0)
     return
@@ -530,7 +535,7 @@ export function renderRefractedBevel(
   const baseOffsetSy = offsetY * srcScale - 0.5
 
   const { count, indices, px, py, vecX, vecY, alpha } = field
-  const spread = clamp01(chroma) * 0.2
+  const spread = (clamp(dispersion, 0, 100) / 100) * 0.5
   const useChroma = spread > 0.0005
 
   if (!useChroma) {

@@ -63,16 +63,14 @@ function measureElementBox(el: HTMLElement): BoxMetrics {
 export const LiquidGlass = memo(function LiquidGlass({
   mode = 'layer',
   size,
-  strength = DEFAULTS.strength,
-  curvature = DEFAULTS.curvature,
+  refraction = DEFAULTS.refraction,
   depth = DEFAULTS.depth,
+  dispersion = DEFAULTS.dispersion,
+  frost = DEFAULTS.frost,
   splay = DEFAULTS.splay,
-  chroma = DEFAULTS.chroma,
-  blur = DEFAULTS.blur,
-  edgeHighlight = DEFAULTS.edgeHighlight,
-  glow = DEFAULTS.glow,
-  specularAngle = DEFAULTS.specularAngle,
-  specularMode = DEFAULTS.specularMode,
+  lightAngle = DEFAULTS.lightAngle,
+  lightIntensity = DEFAULTS.lightIntensity,
+  borderRadius: borderRadiusProp,
   tint,
   refractionTarget,
   children,
@@ -85,8 +83,8 @@ export const LiquidGlass = memo(function LiquidGlass({
   const fieldRef = useRef<BevelField | null>(null)
   const outImageRef = useRef<ImageData | null>(null)
   const parentTintRef = useRef<string>('')
-  const opticsRef = useRef({ strength, chroma })
-  opticsRef.current = { strength, chroma }
+  const opticsRef = useRef({ refraction, dispersion })
+  opticsRef.current = { refraction, dispersion }
 
   const onMapUpdateRef = useRef(onMapUpdate)
   onMapUpdateRef.current = onMapUpdate
@@ -128,7 +126,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     ro.observe(el)
     if (el.parentElement) ro.observe(el.parentElement)
     return () => ro.disconnect()
-  }, [mode, explicitSize, isStandalone, className, style?.borderRadius])
+  }, [mode, explicitSize, isStandalone, className, style?.borderRadius, borderRadiusProp])
 
   const drawFrame = useCallback(() => {
     const canvas = canvasRef.current
@@ -142,9 +140,9 @@ export const LiquidGlass = memo(function LiquidGlass({
     if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
     if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
 
-    const { strength: curStrength, chroma: curChroma } = opticsRef.current
+    const { refraction: curRefraction, dispersion: curDispersion } = opticsRef.current
     const snapshot = getTargetSnapshot(targetEl)
-    if (!snapshot || curStrength <= 0.0001) {
+    if (!snapshot || curRefraction <= 0.01) {
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
       return
     }
@@ -169,8 +167,8 @@ export const LiquidGlass = memo(function LiquidGlass({
       snapshot,
       offsetX,
       offsetY,
-      curStrength,
-      curChroma,
+      curRefraction,
+      curDispersion,
     )
 
     if (parentTintRef.current) {
@@ -198,11 +196,10 @@ export const LiquidGlass = memo(function LiquidGlass({
           height,
           borderRadius,
           depth,
-          curvature,
           splay,
         })
         onMapUpdateRef.current({
-          fieldId: opticsRef.current.strength > 0.0001 ? 'css-optics' : null,
+          fieldId: opticsRef.current.refraction > 0.01 ? 'css-optics' : null,
           dataUrl: dataUrl || null,
           width,
           height,
@@ -219,7 +216,6 @@ export const LiquidGlass = memo(function LiquidGlass({
       height,
       borderRadius,
       depth,
-      curvature,
       splay,
       scale,
     })
@@ -228,7 +224,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     drawFrame()
 
     onMapUpdateRef.current?.({
-      fieldId: opticsRef.current.strength > 0.0001 && curvature > 0.001 ? field.fieldId : null,
+      fieldId: opticsRef.current.refraction > 0.01 && depth > 0.5 ? field.fieldId : null,
       dataUrl: dataUrl || null,
       width,
       height,
@@ -242,9 +238,9 @@ export const LiquidGlass = memo(function LiquidGlass({
         fieldRef.current = null
       }
     }
-  }, [targetEl, metrics, depth, curvature, splay, drawFrame])
+  }, [targetEl, metrics, depth, splay, drawFrame])
 
-  // Redraw immediately when optical strength/chroma changes without regenerating bevel field
+  // Redraw immediately when refraction/dispersion change without regenerating the bevel field
   useLayoutEffect(() => {
     drawFrame()
     const field = fieldRef.current
@@ -254,11 +250,10 @@ export const LiquidGlass = memo(function LiquidGlass({
         height: field.height,
         borderRadius: field.borderRadius,
         depth,
-        curvature,
         splay,
       })
       onMapUpdateRef.current({
-        fieldId: strength > 0.0001 && curvature > 0.001 ? field.fieldId : null,
+        fieldId: refraction > 0.01 && depth > 0.5 ? field.fieldId : null,
         dataUrl: dataUrl || null,
         width: field.width,
         height: field.height,
@@ -267,7 +262,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strength, chroma, drawFrame])
+  }, [refraction, dispersion, drawFrame])
 
   // Subscribe to shared target snapshot + track movement, tints & transitions with zero-frame lag
   useLayoutEffect(() => {
@@ -379,15 +374,18 @@ export const LiquidGlass = memo(function LiquidGlass({
   }, [targetEl, mode, tint, drawFrame])
 
   const rootStyle = useMemo<CSSProperties>(() => {
-    const rad = ((specularAngle - 90) * Math.PI) / 180
+    // lightAngle 0 = light from the top; the CSS rim/glow treat the same angle as the highlight direction
+    const rad = ((lightAngle - 90) * Math.PI) / 180
     const lx = Math.cos(rad)
     const ly = Math.sin(rad)
+    const frostAmt = Math.max(0, Math.min(100, frost))
+    const light = Math.max(0, Math.min(100, lightIntensity)) / 50
 
     const vars: Record<string, string | number> = {
-      '--lg-blur': `${Math.max(0, blur).toFixed(1)}px`,
-      '--lg-edge-highlight': Math.max(0, Math.min(1, edgeHighlight)),
-      '--lg-specular-angle': `${specularAngle}deg`,
-      '--lg-glow': Math.max(0, Math.min(1, glow)),
+      '--lg-frost-blur': `${(frostAmt * 0.2).toFixed(2)}px`,
+      '--lg-frost-sat': `${(100 + frostAmt * 0.8).toFixed(1)}%`,
+      '--lg-light-angle': `${lightAngle}deg`,
+      '--lg-light': light.toFixed(3),
       '--lg-lx': lx.toFixed(4),
       '--lg-ly': ly.toFixed(4),
     }
@@ -401,15 +399,17 @@ export const LiquidGlass = memo(function LiquidGlass({
         }
         : {}
 
+    const radiusStyle: CSSProperties = borderRadiusProp !== undefined ? { borderRadius: borderRadiusProp } : {}
     const tintStyle: CSSProperties = tint !== undefined ? { backgroundColor: tint } : {}
 
     return {
       ...sizeStyles,
+      ...radiusStyle,
       ...tintStyle,
       ...style,
       ...vars,
     } as CSSProperties
-  }, [blur, edgeHighlight, specularAngle, glow, explicitSize, tint, style])
+  }, [frost, lightAngle, lightIntensity, explicitSize, borderRadiusProp, tint, style])
 
   const isLayer = mode === 'layer'
 
@@ -437,20 +437,11 @@ export const LiquidGlass = memo(function LiquidGlass({
         </div>
       )}
 
-      {blur > 0.05 && <div className="lg-frost" aria-hidden="true" />}
+      {/* Pipeline order: canvas refraction (+ dispersion) first, then frost blur composited over it */}
+      {frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
 
-      {glow > 0.001 && (
-        <div
-          className={specularMode === 'apple' ? 'lg-glow lg-glow--apple' : 'lg-glow'}
-          aria-hidden="true"
-        />
-      )}
-      {edgeHighlight > 0.001 && (
-        <div
-          className={specularMode === 'apple' ? 'lg-rim lg-rim--apple' : 'lg-rim'}
-          aria-hidden="true"
-        />
-      )}
+      {lightIntensity > 0.05 && <div className="lg-glow" aria-hidden="true" />}
+      {lightIntensity > 0.05 && <div className="lg-rim" aria-hidden="true" />}
 
       {hasChildren && <div className="lg-content">{children}</div>}
     </div>

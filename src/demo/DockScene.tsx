@@ -340,16 +340,13 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
             className="floating-search-glass"
             refractionTarget={sceneRef}
             tint={alphaTinted ? activeTint.color : undefined}
-            strength={Math.max(glass.strength ?? 0.08, 0.065)}
-            curvature={glass.curvature}
-            depth={Math.max(glass.depth ?? 6, 6)}
+            refraction={glass.refraction}
+            depth={glass.depth}
             splay={glass.splay}
-            chroma={glass.chroma}
-            blur={glass.blur}
-            edgeHighlight={Math.max(glass.edgeHighlight ?? 0.75, 0.65)}
-            glow={glass.glow}
-            specularAngle={glass.specularAngle}
-            specularMode={glass.specularMode}
+            dispersion={glass.dispersion}
+            frost={glass.frost}
+            lightAngle={glass.lightAngle}
+            lightIntensity={Math.max(glass.lightIntensity ?? 40, 50)}
           >
             <div className="floating-search-inner">
               <svg className="floating-search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">

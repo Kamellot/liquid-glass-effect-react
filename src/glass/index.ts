@@ -26,5 +26,4 @@ export {
   type LiquidGlassMode,
   type LiquidGlassOptions,
   type LiquidGlassProps,
-  type SpecularMode,
 } from './types'

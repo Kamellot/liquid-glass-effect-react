@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { LiquidGlass, type DisplacementMapInfo, type LiquidGlassProps } from '../glass'
+import { DEFAULTS, LiquidGlass, type DisplacementMapInfo, type LiquidGlassProps } from '../glass'
 
 interface HeroProps {
   lens: LiquidGlassProps & { size: number }
@@ -122,7 +122,7 @@ export function Hero({ lens }: HeroProps) {
 
         <p className="hero-sub">
           Drag the circular lens across typography and the cosmic boundary. A custom 1/4-quadrant SDF bevel engine bends
-          pixels on <code>&lt;canvas&gt;</code> across every browser, while blur, rim speculars, and inner glow run in CSS.
+          pixels on <code>&lt;canvas&gt;</code> across every browser, while frost, the directional rim light, and inner reflection run in CSS.
         </p>
 
         <div
@@ -158,7 +158,7 @@ export function Hero({ lens }: HeroProps) {
             <div className="debug-title">R/G Displacement Map</div>
             <div className="debug-row">
               {mapInfo ? `${mapInfo.width}×${mapInfo.height}px · r${Math.round(mapInfo.borderRadius)}` : 'Initializing…'}
-              {` · depth ${lens.depth ?? 18}px`}
+              {` · depth ${lens.depth ?? DEFAULTS.depth}px`}
             </div>
             <div className="debug-row debug-row--muted">
               <span>1/4 SDF mirrored</span>
