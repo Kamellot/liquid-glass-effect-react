@@ -22,6 +22,7 @@ export {
 export {
   DEFAULT_LENS_SIZE,
   DEFAULTS,
+  FIGMA_MATERIAL_DEFAULTS,
   type DisplacementMapInfo,
   type LiquidGlassMode,
   type LiquidGlassOptions,

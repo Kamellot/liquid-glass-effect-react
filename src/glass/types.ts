@@ -28,6 +28,22 @@ export interface LiquidGlassOptions {
   borderRadius?: number | string
   /** Optional UI background color/tint fill applied seamlessly across interior and refracted bevel. */
   tint?: string
+  /**
+   * Figma-style `Fill + Shadow` base fill color (e.g. `'#101010'`, `'rgb(30 64 175 / 0.75)'`),
+   * or `true` to use Figma's default `#101010` fill.
+   */
+  fill?: string | boolean
+  /**
+   * Top surface sheen layered over `fill` (Figma default: `'rgb(255 255 255 / 0.04)'`).
+   * Set to `'none'` or `'transparent'` to disable.
+   */
+  fillOverlay?: string
+  /**
+   * Figma-style `Fill + Shadow` edge/drop shadows.
+   * `true` (or omitted when `fill` is set) uses Figma's default directional edge shadows;
+   * pass a custom CSS `box-shadow` string to customize, or `false` / `'none'` to disable.
+   */
+  shadow?: string | boolean
 }
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
@@ -57,7 +73,20 @@ export interface LiquidGlassProps extends LiquidGlassOptions {
 
 export const DEFAULT_LENS_SIZE = 166
 
-export const DEFAULTS: Required<Omit<LiquidGlassOptions, 'size' | 'tint' | 'borderRadius'>> = {
+export const FIGMA_MATERIAL_DEFAULTS = {
+  fill: '#101010',
+  fillOverlay: 'rgb(255 255 255 / 0.04)',
+  shadow: [
+    '-1.25px 0 0 -0.75px #d0d0d0',
+    '1.25px 0 0 -0.75px #d0d0d0',
+    '0 -1.25px 0 -0.75px rgb(255 255 255 / 0.35)',
+    '0 1.25px 0 -0.75px rgb(0 0 0 / 0.35)',
+  ].join(', '),
+} as const
+
+export const DEFAULTS: Required<
+  Omit<LiquidGlassOptions, 'size' | 'tint' | 'borderRadius' | 'fill' | 'fillOverlay' | 'shadow'>
+> = {
   refraction: 70,
   depth: 30,
   dispersion: 20,

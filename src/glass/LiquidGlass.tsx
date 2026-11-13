@@ -19,7 +19,7 @@ import {
   type BevelField,
 } from './refractionEngine'
 import { isWebGLRefractionAvailable } from './webglRefraction'
-import { DEFAULTS, type LiquidGlassProps } from './types'
+import { DEFAULTS, FIGMA_MATERIAL_DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
 
 interface BoxMetrics {
@@ -73,6 +73,9 @@ export const LiquidGlass = memo(function LiquidGlass({
   lightIntensity = DEFAULTS.lightIntensity,
   borderRadius: borderRadiusProp,
   tint,
+  fill,
+  fillOverlay,
+  shadow,
   refractionTarget,
   children,
   className,
@@ -433,6 +436,31 @@ export const LiquidGlass = memo(function LiquidGlass({
     } as CSSProperties
   }, [frost, lightAngle, lightIntensity, explicitSize, borderRadiusProp, tint, style])
 
+  const fillLayerStyle = useMemo<CSSProperties | null>(() => {
+    const hasFill = fill !== undefined && fill !== false
+    const baseFill = fill === true ? FIGMA_MATERIAL_DEFAULTS.fill : typeof fill === 'string' ? fill : undefined
+    const overlay =
+      fillOverlay === 'none' || fillOverlay === 'transparent'
+        ? undefined
+        : (fillOverlay ?? (hasFill ? FIGMA_MATERIAL_DEFAULTS.fillOverlay : undefined))
+    const resolvedShadow =
+      shadow === false || shadow === 'none'
+        ? undefined
+        : typeof shadow === 'string'
+          ? shadow
+          : shadow === true || hasFill
+            ? FIGMA_MATERIAL_DEFAULTS.shadow
+            : undefined
+
+    if (!baseFill && !overlay && !resolvedShadow) return null
+
+    const s: CSSProperties = {}
+    if (baseFill) s.backgroundColor = baseFill
+    if (overlay) s.backgroundImage = `linear-gradient(${overlay}, ${overlay})`
+    if (resolvedShadow) s.boxShadow = resolvedShadow
+    return s
+  }, [fill, fillOverlay, shadow])
+
   const isLayer = mode === 'layer'
 
   const rootClassName = [
@@ -459,8 +487,9 @@ export const LiquidGlass = memo(function LiquidGlass({
         </div>
       )}
 
-      {/* Pipeline order: canvas refraction (+ dispersion) first, then frost blur composited over it */}
+      {/* Pipeline order: canvas refraction (+ dispersion) first, then frost blur & Figma Fill + Shadow */}
       {frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
+      {fillLayerStyle && <div className="lg-fill" style={fillLayerStyle} aria-hidden="true" />}
 
       {lightIntensity > 0.05 && <div className="lg-glow" aria-hidden="true" />}
       {lightIntensity > 0.05 && <div className="lg-rim" aria-hidden="true" />}

@@ -30,6 +30,7 @@
 
 .lg-refract-clip,
 .lg-refract-canvas,
+.lg-fill,
 .lg-frost,
 .lg-glow,
 .lg-rim {
@@ -37,6 +38,10 @@
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
+}
+
+.lg-fill {
+  z-index: 0;
 }
 
 /* Rounded corner clip for the refracted bevel <canvas> */
