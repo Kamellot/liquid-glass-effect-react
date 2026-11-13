@@ -121,7 +121,7 @@ export function Hero({ lens }: HeroProps) {
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div ref={stageRef} className="hero-stage">
-        <div className="hero-photo" role="img" aria-label="Cosmic nebula photograph" />
+        <div className="hero-photo" role="img" aria-label="Abstract Apple-style layered ribbon wallpaper" />
 
         <h1 id="hero-title" className="hero-title">
           It refracts anything
@@ -130,7 +130,7 @@ export function Hero({ lens }: HeroProps) {
         </h1>
 
         <p className="hero-sub">
-          Drag the circular lens across typography and the cosmic boundary. A custom 1/4-quadrant SDF bevel engine bends
+          Drag the circular lens across typography and the abstract wallpaper boundary. A custom 1/4-quadrant SDF bevel engine bends
           pixels on <code>&lt;canvas&gt;</code> across every browser, while frost, the directional rim light, and inner reflection run in CSS.
         </p>
 

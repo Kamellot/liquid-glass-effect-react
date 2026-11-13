@@ -21,6 +21,7 @@ interface SnapshotEntry {
   consumers: Set<() => void>
   ro: ResizeObserver
   mo: MutationObserver
+  onMedia: () => void
   rafId: number
   fontsHooked: boolean
 }
@@ -730,7 +731,7 @@ function paintElementTree(
     ctx.restore()
   }
 
-  // Inline <img> or <svg>
+  // Inline <img>, <video>, <canvas>, or <svg>
   const tag = el.tagName.toUpperCase()
   if (tag === 'IMG') {
     const src = (el as HTMLImageElement).currentSrc || (el as HTMLImageElement).src
@@ -742,6 +743,56 @@ function paintElementTree(
         ctx.clip()
       }
       ctx.drawImage(img, x, y, w, h)
+      ctx.restore()
+    }
+    ctx.restore()
+    return
+  }
+
+  if (tag === 'VIDEO') {
+    const video = el as HTMLVideoElement
+    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+      ctx.save()
+      if (hasRadius) {
+        traceRoundedRect(ctx, x, y, w, h, radii)
+        ctx.clip()
+      }
+      if (cs.objectFit === 'cover') {
+        const ir = video.videoWidth / video.videoHeight
+        const br = w / h
+        let dw = w
+        let dh = h
+        let dx = x
+        let dy = y
+        if (ir > br) {
+          dw = h * ir
+          dx = x + (w - dw) * 0.5
+        } else {
+          dh = w / ir
+          dy = y + (h - dh) * 0.5
+        }
+        ctx.drawImage(video, dx, dy, dw, dh)
+      } else {
+        ctx.drawImage(video, x, y, w, h)
+      }
+      ctx.restore()
+      if (!video.paused && !video.ended) {
+        onAssetReady()
+      }
+    }
+    ctx.restore()
+    return
+  }
+
+  if (tag === 'CANVAS') {
+    const cvs = el as HTMLCanvasElement
+    if (cvs.width > 0 && cvs.height > 0) {
+      ctx.save()
+      if (hasRadius) {
+        traceRoundedRect(ctx, x, y, w, h, radii)
+        ctx.clip()
+      }
+      ctx.drawImage(cvs, x, y, w, h)
       ctx.restore()
     }
     ctx.restore()
@@ -853,6 +904,7 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       consumers: new Set(),
       rafId: 0,
       fontsHooked: false,
+      onMedia: () => scheduleSnapshotRefresh(created),
       ro: new ResizeObserver(() => scheduleSnapshotRefresh(created)),
       mo: new MutationObserver((records) => {
         for (const rec of records) {
@@ -872,6 +924,9 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       attributes: true,
       characterData: true,
     })
+    target.addEventListener('loadeddata', created.onMedia, true)
+    target.addEventListener('play', created.onMedia, true)
+    target.addEventListener('seeked', created.onMedia, true)
 
     if (typeof document !== 'undefined' && document.fonts?.ready) {
       created.fontsHooked = true
@@ -897,6 +952,9 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       if (cur.rafId) cancelAnimationFrame(cur.rafId)
       cur.ro.disconnect()
       cur.mo.disconnect()
+      target.removeEventListener('loadeddata', cur.onMedia, true)
+      target.removeEventListener('play', cur.onMedia, true)
+      target.removeEventListener('seeked', cur.onMedia, true)
       snapshotRegistry.delete(target)
       notifySnapshotStats()
     }

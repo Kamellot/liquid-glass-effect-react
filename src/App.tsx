@@ -3,6 +3,7 @@ import { getEngineStats, subscribeEngineStats, type EngineStats } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
+import { VideoScene } from './demo/VideoScene'
 import { DEFAULT_PARAMS, type DemoParams } from './demo/presets'
 
 const SERVER_STATS: EngineStats = { fields: 0, consumers: 0, bitmaps: 0, snapshots: 0 }
@@ -42,6 +43,7 @@ export default function App() {
         </header>
 
         <Hero lens={lens} />
+        <VideoScene glass={dock} />
         <DockScene glass={dock} />
 
         <footer className="foot">
