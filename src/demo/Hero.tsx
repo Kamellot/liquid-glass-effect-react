@@ -146,7 +146,7 @@ export function Hero({ lens }: HeroProps) {
           />
         </div>
 
-        <aside className="debug-preview" data-lg-ignore="" aria-label="Live displacement map debug preview">
+        <aside className="debug-preview" aria-label="Live displacement map debug preview">
           <div className="debug-thumb">
             {mapInfo?.dataUrl ? (
               <img src={mapInfo.dataUrl} alt="Live generated R/G SDF displacement map texture" />
