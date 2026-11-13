@@ -254,7 +254,7 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
 
   const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
   const u = clamp01(1 - distInward / p.effectiveDepth)
-  const innerAlpha = smooth01(u / 0.04)
+  const innerAlpha = smooth01(u / 0.08)
   const mag = evalBevelMagnitude(u, p.splayExp) * outerAlpha
 
   let ux = 0

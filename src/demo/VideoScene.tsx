@@ -138,10 +138,18 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
     }
   }
 
-  const orbGlass: LiquidGlassProps = {
+  const playOrbGlass: LiquidGlassProps = {
     ...glass,
     refraction: Math.max(glass.refraction ?? 70, 72),
-    depth: Math.max(glass.depth ?? 30, 26),
+    depth: 52,
+    frost: Math.min(glass.frost ?? 6, 8),
+    lightIntensity: Math.max(glass.lightIntensity ?? 40, 48),
+  }
+
+  const skipOrbGlass: LiquidGlassProps = {
+    ...glass,
+    refraction: Math.max(glass.refraction ?? 70, 72),
+    depth: 34,
     frost: Math.min(glass.frost ?? 6, 8),
     lightIntensity: Math.max(glass.lightIntensity ?? 40, 48),
   }
@@ -186,7 +194,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-label="Rewind 15 seconds"
             onClick={() => seekBy(-15)}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...orbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...skipOrbGlass} />
             <span className="video-orb-glyph">
               <Skip15Icon direction="back" />
             </span>
@@ -199,7 +207,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-pressed={playing}
             onClick={togglePlay}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...orbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...playOrbGlass} />
             <span className="video-orb-glyph">
               {playing ? (
                 <svg viewBox="0 0 24 24" className="video-play-svg" aria-hidden="true">
@@ -220,7 +228,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-label="Forward 15 seconds"
             onClick={() => seekBy(15)}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...orbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...skipOrbGlass} />
             <span className="video-orb-glyph">
               <Skip15Icon direction="forward" />
             </span>
