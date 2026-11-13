@@ -109,6 +109,15 @@ export function Hero({ lens }: HeroProps) {
     schedulePosition()
   }
 
+  const rawDepth = lens.depth ?? DEFAULTS.depth
+  const domeDepth =
+    rawDepth <= 0
+      ? 0
+      : Math.min(
+          Math.round(lens.size * 0.5),
+          Math.max(rawDepth, Math.round(Math.pow(rawDepth / 100, 0.6) * (lens.size * 0.5) * 1.32)),
+        )
+
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div ref={stageRef} className="hero-stage">
@@ -143,6 +152,7 @@ export function Hero({ lens }: HeroProps) {
             refractionTarget={stageRef}
             onMapUpdate={setMapInfo}
             {...lens}
+            depth={domeDepth}
           />
         </div>
 
@@ -158,7 +168,7 @@ export function Hero({ lens }: HeroProps) {
             <div className="debug-title">R/G Displacement Map</div>
             <div className="debug-row">
               {mapInfo ? `${mapInfo.width}×${mapInfo.height}px · r${Math.round(mapInfo.borderRadius)}` : 'Initializing…'}
-              {` · depth ${lens.depth ?? DEFAULTS.depth}px`}
+              {` · depth ${domeDepth}px`}
             </div>
             <div className="debug-row debug-row--muted">
               <span>1/4 SDF mirrored</span>

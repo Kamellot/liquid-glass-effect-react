@@ -171,10 +171,6 @@ export function chooseRenderScale(width: number, height: number, depth: number):
   return Math.round(raw * 4) / 4
 }
 
-const SIN_MAX = 0.55
-const MAX_DELTA = Math.asin(SIN_MAX) - Math.asin(SIN_MAX / 1.52)
-const TAN_MAX_DELTA = Math.tan(MAX_DELTA)
-
 interface BevelCurveParams {
   hw: number
   hh: number
@@ -193,18 +189,27 @@ function smooth01(v: number): number {
 }
 
 /**
- * C² sine-dome + Snell refraction profile:
- * - At u = 0 (inner bevel boundary d = depth): value, slope, and curvature all vanish (0),
- *   so the bevel merges invisibly into the flat undistorted center without any ring or crease.
- * - At u = 1 (outer rim d = 0): reaches 1.0 with steep optical glass bending.
- * - `splay` (0–100) lowers `splayExp` from 3.2 to 2.0 so higher splay spreads the bend more
- *   broadly and gently toward the center.
+ * C²-continuous monotonic convex bevel profile with rim-plateauing slope:
+ *   f(u, p) = (u^p / 6) * ((p+1)(p+2) - 2(p-1)(p+2)*u + (p-1)*p*u²)
+ *   f''(u, p) = ((p-1)*p*(p+1)*(p+2) / 6) * u^(p-2) * (1 - u)²
+ *
+ * Optical properties:
+ * - At u = 0 (inner bevel boundary d = depth): f(0) = 0, f'(0) = 0, AND f''(0) = 0,
+ *   so straight lines and typography cross into the bevel with zero curvature jump (no elbow).
+ * - Across 0 < u < 1: f''(u) > 0 everywhere, so the radial magnification slope f'(u) increases
+ *   strictly monotonically toward the outer rim (never pinching halfway inside the bevel).
+ * - At u = 1 (outer rim d = 0): f(1) = 1, f''(1) = f'''(1) = 0, and f'(u) plateaus at its peak
+ *   slope (p + 2) / 3 right across the outer rim, stretching near-edge content smoothly like liquid.
  */
 function evalBevelMagnitude(u: number, splayExp: number): number {
-  const uSplayed = Math.pow(Math.sin(clamp01(u) * Math.PI * 0.5), splayExp)
-  const sinI = uSplayed * SIN_MAX
-  const delta = Math.asin(sinI) - Math.asin(sinI / 1.52)
-  return Math.tan(delta) / TAN_MAX_DELTA
+  const t = clamp01(u)
+  if (t <= 0) return 0
+  if (t >= 1) return 1
+  const p = splayExp
+  const c0 = (p + 1) * (p + 2)
+  const c1 = -2 * (p - 1) * (p + 2)
+  const c2 = (p - 1) * p
+  return (Math.pow(t, p) * (c0 + c1 * t + c2 * t * t)) / 6
 }
 
 function makeBevelCurveParams(w: number, h: number, r: number, depth: number, splay: number): BevelCurveParams {
@@ -213,23 +218,12 @@ function makeBevelCurveParams(w: number, h: number, r: number, depth: number, sp
   const bx = Math.max(0, hw - r)
   const by = Math.max(0, hh - r)
   const effectiveDepth = Math.max(0, Math.min(depth, Math.min(hw, hh)))
-  const splayExp = 2.2 - 0.8 * (clamp(splay, 0, 100) / 100)
+  const splayExp = 3.2 - 0.9 * (clamp(splay, 0, 100) / 100)
   // Pure circle/pill cap (min(bx,by)=0) stays 100% circular (exponent 2.0);
   // rounded rectangles with straight sides smoothly blend in the 2.8 squircle corner normal.
   const straightRatio = clamp01(Math.min(bx, by) / Math.max(1, r))
   const cornerExponent = 2 + (SQUIRCLE_EXPONENT - 2) * straightRatio
-
-  let maxRadialSlope = 0.25
-  if (effectiveDepth > 0.5) {
-    const du = 1 / 256
-    let prev = 0
-    for (let i = 1; i <= 256; i++) {
-      const cur = evalBevelMagnitude(i * du, splayExp)
-      const slope = (cur - prev) / du
-      if (slope > maxRadialSlope) maxRadialSlope = slope
-      prev = cur
-    }
-  }
+  const maxRadialSlope = (splayExp + 2) / 3
 
   return { hw, hh, bx, by, r, effectiveDepth, splayExp, cornerExponent, maxRadialSlope }
 }
@@ -260,7 +254,7 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
 
   const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
   const u = clamp01(1 - distInward / p.effectiveDepth)
-  const innerAlpha = smooth01(u / 0.15)
+  const innerAlpha = smooth01(u / 0.04)
   const mag = evalBevelMagnitude(u, p.splayExp) * outerAlpha
 
   let ux = 0
@@ -554,7 +548,7 @@ export function renderRefractedBevel(
   const baseOffsetSy = offsetY * srcScale - 0.5
 
   const { count, indices, px, py, vecX, vecY, alpha } = field
-  const spread = (clamp(dispersion, 0, 100) / 100) * 0.22
+  const spread = (clamp(dispersion, 0, 100) / 100) * 0.36
   const useChroma = spread > 0.0005
 
   if (!useChroma) {
@@ -592,8 +586,10 @@ export function renderRefractedBevel(
       outData[dst + 3] = (alpha[i] * sA) / 255
     }
   } else {
-    const rMult = 1 - spread
-    const bMult = 1 + spread
+    const m0 = 1 - spread
+    const m1 = 1 - spread * 0.5
+    const m3 = 1 + spread * 0.5
+    const m4 = 1 + spread
 
     for (let i = 0; i < count; i++) {
       const bx = baseOffsetSx + (px[i] + 0.5) * ratio
@@ -601,18 +597,29 @@ export function renderRefractedBevel(
       const dx = vecX[i] * dispBufScale
       const dy = vecY[i] * dispBufScale
 
-      const sxG = bx + dx
-      const syG = by + dy
-      const sxR = bx + dx * rMult
-      const syR = by + dy * rMult
-      const sxB = bx + dx * bMult
-      const syB = by + dy * bMult
+      const x0 = bx + dx * m0
+      const y0 = by + dy * m0
+      const x1 = bx + dx * m1
+      const y1 = by + dy * m1
+      const x2 = bx + dx
+      const y2 = by + dy
+      const x3 = bx + dx * m3
+      const y3 = by + dy * m3
+      const x4 = bx + dx * m4
+      const y4 = by + dy * m4
 
       const dst = indices[i] * 4
-      outData[dst] = sampleChannel(srcData, srcW, maxX, maxY, sxR, syR, 0)
-      outData[dst + 1] = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 1)
-      outData[dst + 2] = sampleChannel(srcData, srcW, maxX, maxY, sxB, syB, 2)
-      const sA = sampleChannel(srcData, srcW, maxX, maxY, sxG, syG, 3)
+      outData[dst] =
+        sampleChannel(srcData, srcW, maxX, maxY, x0, y0, 0) * 0.65 +
+        sampleChannel(srcData, srcW, maxX, maxY, x1, y1, 0) * 0.35
+      outData[dst + 1] =
+        sampleChannel(srcData, srcW, maxX, maxY, x1, y1, 1) * 0.22 +
+        sampleChannel(srcData, srcW, maxX, maxY, x2, y2, 1) * 0.56 +
+        sampleChannel(srcData, srcW, maxX, maxY, x3, y3, 1) * 0.22
+      outData[dst + 2] =
+        sampleChannel(srcData, srcW, maxX, maxY, x3, y3, 2) * 0.35 +
+        sampleChannel(srcData, srcW, maxX, maxY, x4, y4, 2) * 0.65
+      const sA = sampleChannel(srcData, srcW, maxX, maxY, x2, y2, 3)
       outData[dst + 3] = (alpha[i] * sA) / 255
     }
   }
