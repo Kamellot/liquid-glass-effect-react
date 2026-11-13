@@ -1,5 +1,10 @@
 import type { TargetSnapshot } from './domSnapshot'
 import { getSnapshotCount, subscribeSnapshotStats } from './domSnapshot'
+import {
+  isWebGLRefractionAvailable,
+  parseCssColorRgba,
+  renderRefractedBevelWebGL,
+} from './webglRefraction'
 
 const MAX_BITMAP_CACHE = 64
 const MAX_BEVEL_BUDGET = 72_000
@@ -29,6 +34,9 @@ export interface BevelField {
   borderRadius: number
   effectiveDepth: number
   maxRadialSlope: number
+  splayExp: number
+  cornerExponent: number
+  splay: number
   scale: number
   bufWidth: number
   bufHeight: number
@@ -39,6 +47,7 @@ export interface BevelField {
   vecX: Float32Array
   vecY: Float32Array
   alpha: Uint8Array
+  cpuReady: boolean
 }
 
 export interface AcquiredBevel {
@@ -364,18 +373,19 @@ export function generateDisplacementMap(spec: DisplacementMapSpec): string {
   return dataUrl
 }
 
-function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelField {
-  const { w, h, r, depth, splay } = normalizeMapSpec(spec)
-  const scale = clamp(spec.scale, 1, 2)
-  const bufWidth = Math.max(2, Math.round(w * scale))
-  const bufHeight = Math.max(2, Math.round(h * scale))
-  const curve = makeBevelCurveParams(w, h, r, depth, splay)
+const EMPTY_U32 = new Uint32Array(0)
+const EMPTY_U16 = new Uint16Array(0)
+const EMPTY_F32 = new Float32Array(0)
+const EMPTY_U8 = new Uint8Array(0)
 
+function populateCpuBevelArrays(field: BevelField): void {
+  if (field.cpuReady) return
+  const { width: w, height: h, borderRadius: r, effectiveDepth, splay, scale, bufWidth, bufHeight } = field
+  const curve = makeBevelCurveParams(w, h, r, effectiveDepth, splay)
   const qW = Math.ceil(bufWidth * 0.5)
   const qH = Math.ceil(bufHeight * 0.5)
   const invScale = 1 / scale
 
-  // Upper bound capacity: worst case bevel covers all buffer pixels
   const maxEntries = bufWidth * bufHeight
   const indices = new Uint32Array(maxEntries)
   const px = new Uint16Array(maxEntries)
@@ -417,7 +427,24 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
     }
   }
 
-  return {
+  field.count = count
+  field.indices = indices.subarray(0, count)
+  field.px = px.subarray(0, count)
+  field.py = py.subarray(0, count)
+  field.vecX = vecX.subarray(0, count)
+  field.vecY = vecY.subarray(0, count)
+  field.alpha = alpha.subarray(0, count)
+  field.cpuReady = true
+}
+
+function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelField {
+  const { w, h, r, depth, splay } = normalizeMapSpec(spec)
+  const scale = clamp(spec.scale, 1, 2)
+  const bufWidth = Math.max(2, Math.round(w * scale))
+  const bufHeight = Math.max(2, Math.round(h * scale))
+  const curve = makeBevelCurveParams(w, h, r, depth, splay)
+
+  const field: BevelField = {
     fieldId,
     hash,
     width: w,
@@ -425,31 +452,44 @@ function buildBevelField(fieldId: string, hash: string, spec: BevelSpec): BevelF
     borderRadius: r,
     effectiveDepth: curve.effectiveDepth,
     maxRadialSlope: curve.maxRadialSlope,
+    splayExp: curve.splayExp,
+    cornerExponent: curve.cornerExponent,
+    splay,
     scale,
     bufWidth,
     bufHeight,
-    count,
-    indices: indices.subarray(0, count),
-    px: px.subarray(0, count),
-    py: py.subarray(0, count),
-    vecX: vecX.subarray(0, count),
-    vecY: vecY.subarray(0, count),
-    alpha: alpha.subarray(0, count),
+    count: 0,
+    indices: EMPTY_U32,
+    px: EMPTY_U16,
+    py: EMPTY_U16,
+    vecX: EMPTY_F32,
+    vecY: EMPTY_F32,
+    alpha: EMPTY_U8,
+    cpuReady: false,
   }
+
+  if (!isWebGLRefractionAvailable()) {
+    populateCpuBevelArrays(field)
+  }
+
+  return field
 }
 
-export function acquireBevelField(spec: BevelSpec): AcquiredBevel {
+export function acquireBevelField(spec: BevelSpec, needDataUrl = true): AcquiredBevel {
   const hash = buildBevelHash(spec)
   const existing = activeBevels.get(hash)
   if (existing) {
     existing.refCount += 1
+    if (needDataUrl && !existing.dataUrl) {
+      existing.dataUrl = generateDisplacementMap(spec)
+    }
     notifyStats()
     return { field: existing.field, dataUrl: existing.dataUrl }
   }
 
   revisionCounter += 1
   const fieldId = `lg-b${revisionCounter}`
-  const dataUrl = generateDisplacementMap(spec)
+  const dataUrl = needDataUrl ? generateDisplacementMap(spec) : ''
   const field = buildBevelField(fieldId, hash, spec)
 
   activeBevels.set(hash, { field, dataUrl, refCount: 1 })
@@ -513,18 +553,15 @@ function sampleChannel(
  */
 export function renderRefractedBevel(
   ctx: CanvasRenderingContext2D,
-  outImageData: ImageData,
+  outImageData: ImageData | null,
   field: BevelField,
   snapshot: TargetSnapshot,
   offsetX: number,
   offsetY: number,
   refraction: number,
   dispersion: number,
+  tintColor = '',
 ): void {
-  const outData = outImageData.data
-  const out32 = new Uint32Array(outData.buffer)
-  out32.fill(0)
-
   const rawDisp = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth * 0.85
   // Asymptotic soft knee anchored to the curve's peak radial slope prevents caustic folds at any slider combo
   const hardLimit = (field.effectiveDepth * 0.96) / field.maxRadialSlope
@@ -532,12 +569,52 @@ export function renderRefractedBevel(
   const excess = rawDisp - kneeStart
   const headroom = hardLimit - kneeStart
   const dispCssPx = rawDisp <= kneeStart ? rawDisp : kneeStart + (headroom * excess) / (headroom + excess)
-  if (dispCssPx <= 0.001 || field.count === 0) {
-    ctx.putImageData(outImageData, 0, 0)
+  if (dispCssPx <= 0.001 || field.effectiveDepth <= 0.5) {
+    ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
     return
   }
 
+  const spread = (clamp(dispersion, 0, 100) / 100) * 0.36
+  const parsedTint = tintColor ? parseCssColorRgba(tintColor) : null
+
+  if (
+    renderRefractedBevelWebGL(
+      ctx,
+      field,
+      snapshot,
+      offsetX,
+      offsetY,
+      dispCssPx,
+      spread,
+      parsedTint,
+    )
+  ) {
+    if (tintColor && !parsedTint) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'source-atop'
+      ctx.fillStyle = tintColor
+      ctx.fillRect(0, 0, field.bufWidth, field.bufHeight)
+      ctx.restore()
+    }
+    return
+  }
+
+  populateCpuBevelArrays(field)
+  if (field.count === 0) {
+    ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+    return
+  }
+
+  const imgData = outImageData ?? ctx.createImageData(field.bufWidth, field.bufHeight)
+  const outData = imgData.data
+  const out32 = new Uint32Array(outData.buffer)
+  out32.fill(0)
+
   const srcData = snapshot.data
+  if (srcData.length === 0) {
+    ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+    return
+  }
   const srcW = snapshot.width
   const srcScale = snapshot.scale
   const maxX = srcW - 1
@@ -548,7 +625,6 @@ export function renderRefractedBevel(
   const baseOffsetSy = offsetY * srcScale - 0.5
 
   const { count, indices, px, py, vecX, vecY, alpha } = field
-  const spread = (clamp(dispersion, 0, 100) / 100) * 0.36
   const useChroma = spread > 0.0005
 
   if (!useChroma) {
@@ -624,5 +700,12 @@ export function renderRefractedBevel(
     }
   }
 
-  ctx.putImageData(outImageData, 0, 0)
+  ctx.putImageData(imgData, 0, 0)
+  if (tintColor) {
+    ctx.save()
+    ctx.globalCompositeOperation = 'source-atop'
+    ctx.fillStyle = tintColor
+    ctx.fillRect(0, 0, field.bufWidth, field.bufHeight)
+    ctx.restore()
+  }
 }

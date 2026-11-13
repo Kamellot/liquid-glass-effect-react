@@ -18,6 +18,7 @@ import {
   renderRefractedBevel,
   type BevelField,
 } from './refractionEngine'
+import { isWebGLRefractionAvailable } from './webglRefraction'
 import { DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
 
@@ -83,6 +84,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   const fieldRef = useRef<BevelField | null>(null)
   const outImageRef = useRef<ImageData | null>(null)
   const parentTintRef = useRef<string>('')
+  const isVisibleRef = useRef<boolean>(true)
   const opticsRef = useRef({ refraction, dispersion })
   opticsRef.current = { refraction, dispersion }
 
@@ -129,6 +131,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   }, [mode, explicitSize, isStandalone, className, style?.borderRadius, borderRadiusProp])
 
   const drawFrame = useCallback(() => {
+    if (!isVisibleRef.current) return
     const canvas = canvasRef.current
     const root = rootRef.current
     const field = fieldRef.current
@@ -148,9 +151,10 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
 
     if (
-      !outImageRef.current ||
-      outImageRef.current.width !== field.bufWidth ||
-      outImageRef.current.height !== field.bufHeight
+      !isWebGLRefractionAvailable() &&
+      (!outImageRef.current ||
+        outImageRef.current.width !== field.bufWidth ||
+        outImageRef.current.height !== field.bufHeight)
     ) {
       outImageRef.current = ctx.createImageData(field.bufWidth, field.bufHeight)
     }
@@ -169,15 +173,8 @@ export const LiquidGlass = memo(function LiquidGlass({
       offsetY,
       curRefraction,
       curDispersion,
+      parentTintRef.current,
     )
-
-    if (parentTintRef.current) {
-      ctx.save()
-      ctx.globalCompositeOperation = 'source-atop'
-      ctx.fillStyle = parentTintRef.current
-      ctx.fillRect(0, 0, field.bufWidth, field.bufHeight)
-      ctx.restore()
-    }
   }, [targetEl])
 
   // Acquire shared 1/4-SDF bevel field before paint & emit debug R/G map
@@ -211,14 +208,17 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
 
     const scale = chooseRenderScale(width, height, depth)
-    const { field, dataUrl } = acquireBevelField({
-      width,
-      height,
-      borderRadius,
-      depth,
-      splay,
-      scale,
-    })
+    const { field, dataUrl } = acquireBevelField(
+      {
+        width,
+        height,
+        borderRadius,
+        depth,
+        splay,
+        scale,
+      },
+      Boolean(onMapUpdateRef.current),
+    )
 
     fieldRef.current = field
     drawFrame()
@@ -315,7 +315,26 @@ export const LiquidGlass = memo(function LiquidGlass({
     syncTint()
     drawFrame()
 
+    let io: IntersectionObserver | null = null
+    if (typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver(
+        (entries) => {
+          const hit = entries[entries.length - 1]
+          if (!hit) return
+          const wasVisible = isVisibleRef.current
+          isVisibleRef.current = hit.isIntersecting
+          if (hit.isIntersecting && !wasVisible) {
+            syncTint()
+            drawFrame()
+          }
+        },
+        { rootMargin: '150px' },
+      )
+      io.observe(root)
+    }
+
     const scheduleScrollDraw = () => {
+      if (!isVisibleRef.current) return
       if (!scrollRaf) {
         scrollRaf = requestAnimationFrame(() => {
           scrollRaf = 0
@@ -329,7 +348,9 @@ export const LiquidGlass = memo(function LiquidGlass({
 
     // Synchronous redraw inside mutation microtask ensures zero trailing during translate3d drag
     const ancestorMo = new MutationObserver(() => {
-      syncTint()
+      if (tint === undefined && mode === 'layer') {
+        syncTint()
+      }
       drawFrame()
     })
 
@@ -360,6 +381,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       if (scrollRaf) cancelAnimationFrame(scrollRaf)
       stopAnimLoop()
       unsubSnapshot()
+      io?.disconnect()
       posRo.disconnect()
       ancestorMo.disconnect()
       root.removeEventListener('transitionrun', startAnimLoop)

@@ -1,5 +1,7 @@
 export interface TargetSnapshot {
-  data: Uint8ClampedArray
+  readonly data: Uint8ClampedArray
+  canvas: HTMLCanvasElement
+  version: number
   width: number
   height: number
   scale: number
@@ -18,10 +20,16 @@ interface SnapshotEntry {
   canvas: HTMLCanvasElement
   ctx: CanvasRenderingContext2D
   snapshot: TargetSnapshot | null
+  version: number
+  isVisible: boolean
+  deferredWhileHidden: boolean
+  videoCallbacks: WeakSet<HTMLVideoElement>
   consumers: Set<() => void>
   ro: ResizeObserver
   mo: MutationObserver
+  io: IntersectionObserver | null
   onMedia: () => void
+  onVisibilityChange: () => void
   rafId: number
   fontsHooked: boolean
 }
@@ -685,6 +693,7 @@ function paintElementTree(
   snapScale: number,
   onAssetReady: () => void,
   isRootTarget: boolean,
+  onVideoPlaying?: (video: HTMLVideoElement) => void,
 ): void {
   if (!isRootTarget && (el.hasAttribute('data-lg-root') || el.hasAttribute('data-lg-ignore'))) {
     return
@@ -777,7 +786,11 @@ function paintElementTree(
       }
       ctx.restore()
       if (!video.paused && !video.ended) {
-        onAssetReady()
+        if (onVideoPlaying) {
+          onVideoPlaying(video)
+        } else {
+          onAssetReady()
+        }
       }
     }
     ctx.restore()
@@ -825,14 +838,45 @@ function paintElementTree(
     }
   }
   for (const childEl of orderedChildElements(el)) {
-    paintElementTree(ctx, childEl, targetRect, snapScale, onAssetReady, false)
+    paintElementTree(ctx, childEl, targetRect, snapScale, onAssetReady, false, onVideoPlaying)
   }
 
   ctx.restore()
 }
 
+function isTargetActive(entry: SnapshotEntry): boolean {
+  if (!entry.isVisible) return false
+  if (typeof document !== 'undefined' && document.hidden) return false
+  return true
+}
+
+function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void {
+  if (!isTargetActive(entry)) {
+    entry.deferredWhileHidden = true
+    return
+  }
+  const rvfc = (video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number })
+    .requestVideoFrameCallback
+  if (typeof rvfc === 'function') {
+    if (entry.videoCallbacks.has(video)) return
+    entry.videoCallbacks.add(video)
+    rvfc.call(video, () => {
+      entry.videoCallbacks.delete(video)
+      if (!snapshotRegistry.has(entry.target)) return
+      if (!isTargetActive(entry)) {
+        entry.deferredWhileHidden = true
+        return
+      }
+      scheduleSnapshotRefresh(entry)
+    })
+  } else {
+    scheduleSnapshotRefresh(entry)
+  }
+}
+
 function captureSnapshotNow(entry: SnapshotEntry): void {
   entry.rafId = 0
+  entry.deferredWhileHidden = false
   const rect = entry.target.getBoundingClientRect()
   const cssW = Math.max(0, Math.round(rect.width))
   const cssH = Math.max(0, Math.round(rect.height))
@@ -856,27 +900,43 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
 
   const schedule = () => scheduleSnapshotRefresh(entry)
-  paintElementTree(ctx, entry.target, rect, scale, schedule, true)
+  const onVideoPlaying = (video: HTMLVideoElement) => scheduleVideoFrame(entry, video)
+  paintElementTree(ctx, entry.target, rect, scale, schedule, true, onVideoPlaying)
 
-  try {
-    const imgData = ctx.getImageData(0, 0, bufW, bufH)
-    entry.snapshot = {
-      data: imgData.data,
-      width: bufW,
-      height: bufH,
-      scale,
-      cssWidth: cssW,
-      cssHeight: cssH,
-    }
-  } catch {
-    // Tainted canvas guard
-    entry.snapshot = null
+  entry.version += 1
+  const snapVersion = entry.version
+  let cachedData: Uint8ClampedArray | null = null
+  let dataFailed = false
+
+  entry.snapshot = {
+    canvas: entry.canvas,
+    version: snapVersion,
+    width: bufW,
+    height: bufH,
+    scale,
+    cssWidth: cssW,
+    cssHeight: cssH,
+    get data(): Uint8ClampedArray {
+      if (cachedData) return cachedData
+      if (dataFailed) return new Uint8ClampedArray(0)
+      try {
+        cachedData = ctx.getImageData(0, 0, bufW, bufH).data
+        return cachedData
+      } catch {
+        dataFailed = true
+        return new Uint8ClampedArray(0)
+      }
+    },
   }
 
   for (const notify of entry.consumers) notify()
 }
 
 function scheduleSnapshotRefresh(entry: SnapshotEntry): void {
+  if (!isTargetActive(entry)) {
+    entry.deferredWhileHidden = true
+    return
+  }
   if (entry.rafId) return
   entry.rafId = requestAnimationFrame(() => captureSnapshotNow(entry))
 }
@@ -893,7 +953,7 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
   let entry = snapshotRegistry.get(target)
   if (!entry) {
     const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    const ctx = canvas.getContext('2d')
     if (!ctx) return () => {}
 
     const created: SnapshotEntry = {
@@ -901,10 +961,21 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       canvas,
       ctx,
       snapshot: null,
+      version: 0,
+      isVisible: true,
+      deferredWhileHidden: false,
+      videoCallbacks: new WeakSet(),
       consumers: new Set(),
       rafId: 0,
       fontsHooked: false,
+      io: null,
       onMedia: () => scheduleSnapshotRefresh(created),
+      onVisibilityChange: () => {
+        if (isTargetActive(created) && created.deferredWhileHidden) {
+          created.deferredWhileHidden = false
+          scheduleSnapshotRefresh(created)
+        }
+      },
       ro: new ResizeObserver(() => scheduleSnapshotRefresh(created)),
       mo: new MutationObserver((records) => {
         for (const rec of records) {
@@ -917,6 +988,22 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       }),
     }
 
+    if (typeof IntersectionObserver !== 'undefined') {
+      created.io = new IntersectionObserver(
+        (entries) => {
+          const hit = entries[entries.length - 1]
+          if (!hit) return
+          created.isVisible = hit.isIntersecting
+          if (hit.isIntersecting && created.deferredWhileHidden && !document.hidden) {
+            created.deferredWhileHidden = false
+            scheduleSnapshotRefresh(created)
+          }
+        },
+        { rootMargin: '200px' },
+      )
+      created.io.observe(target)
+    }
+
     created.ro.observe(target)
     created.mo.observe(target, {
       childList: true,
@@ -927,6 +1014,9 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
     target.addEventListener('loadeddata', created.onMedia, true)
     target.addEventListener('play', created.onMedia, true)
     target.addEventListener('seeked', created.onMedia, true)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', created.onVisibilityChange)
+    }
 
     if (typeof document !== 'undefined' && document.fonts?.ready) {
       created.fontsHooked = true
@@ -952,9 +1042,13 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       if (cur.rafId) cancelAnimationFrame(cur.rafId)
       cur.ro.disconnect()
       cur.mo.disconnect()
+      cur.io?.disconnect()
       target.removeEventListener('loadeddata', cur.onMedia, true)
       target.removeEventListener('play', cur.onMedia, true)
       target.removeEventListener('seeked', cur.onMedia, true)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', cur.onVisibilityChange)
+      }
       snapshotRegistry.delete(target)
       notifySnapshotStats()
     }
