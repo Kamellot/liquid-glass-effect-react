@@ -159,34 +159,6 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
     }
   }
 
-  const rawDepth = glass.depth ?? 30
-  const rawSplay = glass.splay ?? 20
-  // Keep circular video orbs full-dome (depth = radius) whenever depth > 0 so there is never an inner
-  // canvas-vs-video seam circle, while mapping lower Depth values to a steeper outer-rim falloff.
-  const orbSplay = rawDepth < 30 ? Math.max(0, rawSplay * (rawDepth / 30)) : rawSplay
-  const orbRefraction =
-    rawDepth <= 0 ? 0 : Math.round((glass.refraction ?? 70) * (0.45 + 0.55 * Math.min(1, rawDepth / 25)))
-
-  const playOrbGlass: LiquidGlassProps = {
-    ...glass,
-    refraction: orbRefraction,
-    depth: rawDepth <= 0 ? 0 : 52,
-    splay: orbSplay,
-  }
-
-  const skipOrbGlass: LiquidGlassProps = {
-    ...glass,
-    refraction: orbRefraction,
-    depth: rawDepth <= 0 ? 0 : 34,
-    splay: orbSplay,
-  }
-
-  const barGlass: LiquidGlassProps = {
-    ...glass,
-    depth: rawDepth <= 0 ? 0 : 21,
-    splay: orbSplay,
-  }
-
   return (
     <section className="video-section" aria-labelledby="video-title">
       <div className="video-head">
@@ -233,7 +205,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-label="Rewind 15 seconds"
             onClick={() => seekBy(-15)}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...skipOrbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...glass} />
             <span className="video-orb-glyph">
               <Skip15Icon direction="back" />
             </span>
@@ -246,7 +218,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-pressed={playing}
             onClick={togglePlay}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...playOrbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...glass} />
             <span className="video-orb-glyph">
               {playing ? (
                 <svg viewBox="0 0 24 24" className="video-play-svg" aria-hidden="true">
@@ -267,7 +239,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             aria-label="Forward 15 seconds"
             onClick={() => seekBy(15)}
           >
-            <LiquidGlass mode="layer" refractionTarget={stageRef} {...skipOrbGlass} />
+            <LiquidGlass mode="layer" refractionTarget={stageRef} {...glass} />
             <span className="video-orb-glyph">
               <Skip15Icon direction="forward" />
             </span>
@@ -298,7 +270,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
             }
           }}
         >
-          <LiquidGlass mode="layer" refractionTarget={stageRef} {...barGlass} />
+          <LiquidGlass mode="layer" refractionTarget={stageRef} {...glass} />
           <div className="video-scrubber-track">
             <div className="video-scrubber-fill" style={{ width: `${(progress * 100).toFixed(2)}%` }} />
           </div>

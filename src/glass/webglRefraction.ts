@@ -73,10 +73,7 @@ uniform vec4 u_tint;
 float evalBevelMag(float u, float p) {
   if (u <= 0.0) return 0.0;
   if (u >= 1.0) return 1.0;
-  float c0 = (p + 1.0) * (p + 2.0);
-  float c1 = -2.0 * (p - 1.0) * (p + 2.0);
-  float c2 = (p - 1.0) * p;
-  return (pow(u, p) * (c0 + c1 * u + c2 * u * u)) / 6.0;
+  return pow(u, p);
 }
 
 vec4 sampleSnap(vec2 cssPos) {

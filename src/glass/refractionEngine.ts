@@ -198,27 +198,22 @@ function smooth01(v: number): number {
 }
 
 /**
- * C²-continuous monotonic convex bevel profile with rim-plateauing slope:
- *   f(u, p) = (u^p / 6) * ((p+1)(p+2) - 2(p-1)(p+2)*u + (p-1)*p*u²)
- *   f''(u, p) = ((p-1)*p*(p+1)*(p+2) / 6) * u^(p-2) * (1 - u)²
+ * Steep convex Snell's-law rim bevel profile:
+ *   f(t, p) = t^p, where t = 1 - (d / bevelWidth) in [0, 1]
+ *   and p = 1.5 + (splay / 100) * 3.0.
  *
  * Optical properties:
- * - At u = 0 (inner bevel boundary d = depth): f(0) = 0, f'(0) = 0, AND f''(0) = 0,
- *   so straight lines and typography cross into the bevel with zero curvature jump (no elbow).
- * - Across 0 < u < 1: f''(u) > 0 everywhere, so the radial magnification slope f'(u) increases
- *   strictly monotonically toward the outer rim (never pinching halfway inside the bevel).
- * - At u = 1 (outer rim d = 0): f(1) = 1, f''(1) = f'''(1) = 0, and f'(u) plateaus at its peak
- *   slope (p + 2) / 3 right across the outer rim, stretching near-edge content smoothly like liquid.
+ * - Interior (`d >= bevelWidth`, t = 0): strictly neutral (0 displacement, R=128, G=128).
+ * - Inner bevel boundary (`t = 0`): f(0) = 0 and f'(0) = 0 (C¹ smooth tangent into flat center).
+ * - Across `0 < t < 1`: f'(t) and f''(t) increase monotonically toward the outer rim.
+ * - Outer perimeter (`d = 0`, t = 1): f(1) = 1 with peak slope `p` right at the outer edge,
+ *   producing true Apple Liquid Glass edge folding, stretching, and RGB dispersion.
  */
 function evalBevelMagnitude(u: number, splayExp: number): number {
   const t = clamp01(u)
   if (t <= 0) return 0
   if (t >= 1) return 1
-  const p = splayExp
-  const c0 = (p + 1) * (p + 2)
-  const c1 = -2 * (p - 1) * (p + 2)
-  const c2 = (p - 1) * p
-  return (Math.pow(t, p) * (c0 + c1 * t + c2 * t * t)) / 6
+  return Math.pow(t, splayExp)
 }
 
 function makeBevelCurveParams(w: number, h: number, r: number, depth: number, splay: number): BevelCurveParams {
@@ -227,12 +222,12 @@ function makeBevelCurveParams(w: number, h: number, r: number, depth: number, sp
   const bx = Math.max(0, hw - r)
   const by = Math.max(0, hh - r)
   const effectiveDepth = Math.max(0, Math.min(depth, Math.min(hw, hh)))
-  const splayExp = 3.2 - 0.9 * (clamp(splay, 0, 100) / 100)
+  const splayExp = 1.5 + (clamp(splay, 0, 100) / 100) * 3.0
   // Pure circle/pill cap (min(bx,by)=0) stays 100% circular (exponent 2.0);
   // rounded rectangles with straight sides smoothly blend in the 2.8 squircle corner normal.
   const straightRatio = clamp01(Math.min(bx, by) / Math.max(1, r))
   const cornerExponent = 2 + (SQUIRCLE_EXPONENT - 2) * straightRatio
-  const maxRadialSlope = (splayExp + 2) / 3
+  const maxRadialSlope = splayExp
 
   return { hw, hh, bx, by, r, effectiveDepth, splayExp, cornerExponent, maxRadialSlope }
 }
@@ -544,12 +539,10 @@ function sampleChannel(
  * sampling `snapshot.data`. This is the refraction stage of the pipeline: it runs FIRST,
  * and the CSS `frost` backdrop blur is composited on top afterwards.
  *
- * - `refraction` (0–100): peak rim pull = `refraction / 100 × bevel depth` px.
- * - `dispersion` (0–100): R/B channels sample at ±`dispersion × 0.5 %` of that pull, so the
- *   split is zero in the flat center and grows only along the curved bevel.
- *
- * Because the displacement points outward and its magnitude falls monotonically inward, the
- * sample position is strictly increasing across the bevel: it can never fold or tear.
+ * - `refraction` (0–100): peak rim pull = `refraction / 100 × bevel depth × 1.5` px,
+ *   peaking at the outer perimeter (`d = 0`) for true Apple Liquid Glass rim folding & pinching.
+ * - `dispersion` (0–100): R/B channels sample along the bevel pull vector, so chromatic
+ *   separation is zero in the flat center and peaks right along the curved outer rim.
  */
 export function renderRefractedBevel(
   ctx: CanvasRenderingContext2D,
@@ -562,13 +555,7 @@ export function renderRefractedBevel(
   dispersion: number,
   tintColor = '',
 ): void {
-  const rawDisp = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth * 0.85
-  // Asymptotic soft knee anchored to the curve's peak radial slope prevents caustic folds at any slider combo
-  const hardLimit = (field.effectiveDepth * 0.96) / field.maxRadialSlope
-  const kneeStart = hardLimit * 0.82
-  const excess = rawDisp - kneeStart
-  const headroom = hardLimit - kneeStart
-  const dispCssPx = rawDisp <= kneeStart ? rawDisp : kneeStart + (headroom * excess) / (headroom + excess)
+  const dispCssPx = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth * 1.5
   if (dispCssPx <= 0.001 || field.effectiveDepth <= 0.5) {
     ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
     return
