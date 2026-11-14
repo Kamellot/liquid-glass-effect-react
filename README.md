@@ -156,8 +156,6 @@ configureLiquidGlass({
 </LiquidGlassProvider>
 ```
 
-The package also exports an optional telemetry and adaptive-quality module at `liquid-glass-react/perf-monitor` (`PerfEngine`, `BenchmarkRunner`, `AdaptiveQualityController`, `usePerfMetrics`, `useAdaptiveQuality`).
-
 ---
 
 ## How It Works

@@ -28,7 +28,6 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
-        'perf-monitor': resolve(__dirname, 'src/perf-monitor/index.ts'),
       },
       formats: ['es'],
       cssFileName: 'styles',

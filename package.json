@@ -22,10 +22,6 @@
       "types": "./dist/lib/index.d.ts",
       "import": "./dist/lib/index.js"
     },
-    "./perf-monitor": {
-      "types": "./dist/lib/perf-monitor/index.d.ts",
-      "import": "./dist/lib/perf-monitor.js"
-    },
     "./styles.css": "./dist/lib/styles.css"
   },
   "files": [

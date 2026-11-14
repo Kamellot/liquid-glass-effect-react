@@ -10,5 +10,5 @@
     "rootDir": "src",
     "types": []
   },
-  "include": ["src/index.ts", "src/glass/**/*", "src/perf-monitor/**/*"]
+  "include": ["src/index.ts", "src/glass/**/*"]
 }
