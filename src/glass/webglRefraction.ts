@@ -12,19 +12,34 @@ export interface WebGLBevelParams {
   bufHeight: number
 }
 
+interface BlurLevel {
+  tex: WebGLTexture
+  fbo: WebGLFramebuffer
+  width: number
+  height: number
+}
+
 interface CachedSnapTexture {
   tex: WebGLTexture
   version: number
   width: number
   height: number
+  blurLevels: BlurLevel[] | null
+  blurVersion: number
 }
 
 interface GlState {
   canvas: HTMLCanvasElement
   gl: WebGLRenderingContext
   program: WebGLProgram
+  downsampleProgram: WebGLProgram
   posBuf: WebGLBuffer
   uSnapshot: WebGLUniformLocation | null
+  uBlur1: WebGLUniformLocation | null
+  uBlur2: WebGLUniformLocation | null
+  uBlur3: WebGLUniformLocation | null
+  uBlur4: WebGLUniformLocation | null
+  uBlur5: WebGLUniformLocation | null
   uSize: WebGLUniformLocation | null
   uHalfSize: WebGLUniformLocation | null
   uBoxHalf: WebGLUniformLocation | null
@@ -35,11 +50,14 @@ interface GlState {
   uSnapOffset: WebGLUniformLocation | null
   uSnapSize: WebGLUniformLocation | null
   uSnapTexel: WebGLUniformLocation | null
+  uSnapDpr: WebGLUniformLocation | null
   uDispCssPx: WebGLUniformLocation | null
   uSpread: WebGLUniformLocation | null
   uFrostPx: WebGLUniformLocation | null
   uSat: WebGLUniformLocation | null
   uTint: WebGLUniformLocation | null
+  uDsSrc: WebGLUniformLocation | null
+  uDsTexel: WebGLUniformLocation | null
   textures: WeakMap<HTMLCanvasElement, CachedSnapTexture>
   contextLost: boolean
 }
@@ -53,11 +71,55 @@ void main() {
 }
 `
 
+const DOWNSAMPLE_VERT_SRC = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`
+
+const DOWNSAMPLE_FRAG_SRC = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_src;
+uniform vec2 u_srcTexel;
+
+void main() {
+  vec2 d = u_srcTexel;
+  vec4 c  = texture2D(u_src, v_uv);
+  vec4 a  = texture2D(u_src, v_uv + vec2(-2.0, -2.0) * d);
+  vec4 b  = texture2D(u_src, v_uv + vec2( 0.0, -2.0) * d);
+  vec4 c1 = texture2D(u_src, v_uv + vec2( 2.0, -2.0) * d);
+  vec4 d1 = texture2D(u_src, v_uv + vec2(-2.0,  0.0) * d);
+  vec4 f  = texture2D(u_src, v_uv + vec2( 2.0,  0.0) * d);
+  vec4 g  = texture2D(u_src, v_uv + vec2(-2.0,  2.0) * d);
+  vec4 h  = texture2D(u_src, v_uv + vec2( 0.0,  2.0) * d);
+  vec4 i  = texture2D(u_src, v_uv + vec2( 2.0,  2.0) * d);
+
+  vec4 j  = texture2D(u_src, v_uv + vec2(-1.0, -1.0) * d);
+  vec4 k  = texture2D(u_src, v_uv + vec2( 1.0, -1.0) * d);
+  vec4 l  = texture2D(u_src, v_uv + vec2(-1.0,  1.0) * d);
+  vec4 m  = texture2D(u_src, v_uv + vec2( 1.0,  1.0) * d);
+
+  gl_FragColor = c * 0.125
+    + (b + d1 + f + h) * 0.0625
+    + (a + c1 + g + i) * 0.03125
+    + (j + k + l + m) * 0.125;
+}
+`
+
 const FRAG_SRC = `
 precision highp float;
 varying vec2 v_uv;
 
 uniform sampler2D u_snapshot;
+uniform sampler2D u_blur1;
+uniform sampler2D u_blur2;
+uniform sampler2D u_blur3;
+uniform sampler2D u_blur4;
+uniform sampler2D u_blur5;
 uniform vec2 u_size;
 uniform vec2 u_halfSize;
 uniform vec2 u_boxHalf;
@@ -68,6 +130,7 @@ uniform float u_cornerExp;
 uniform vec2 u_snapOffset;
 uniform vec2 u_snapSize;
 uniform vec2 u_snapTexel;
+uniform float u_snapDpr;
 uniform float u_dispCssPx;
 uniform float u_spread;
 uniform float u_frostPx;
@@ -80,32 +143,47 @@ float evalBevelMag(float u, float p) {
   return pow(u, p);
 }
 
-vec4 sampleSnap(vec2 cssPos) {
-  vec2 uv = (u_snapOffset + cssPos) / u_snapSize;
-  uv = clamp(uv, u_snapTexel, 1.0 - u_snapTexel);
-  return texture2D(u_snapshot, uv);
-}
-
 vec3 applySat(vec3 c, float sat) {
   float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
   return clamp(mix(vec3(luma), c, sat), 0.0, 1.0);
 }
 
-vec4 sampleFrostedSnap(vec2 cssPos) {
-  if (u_frostPx <= 0.05) {
-    return sampleSnap(cssPos);
+vec4 sampleTex4(sampler2D tex, vec2 uv, vec2 halfTexel) {
+  vec2 lo = halfTexel;
+  vec2 hi = 1.0 - halfTexel;
+  return (
+    texture2D(tex, clamp(uv + vec2(-halfTexel.x, -halfTexel.y), lo, hi)) +
+    texture2D(tex, clamp(uv + vec2( halfTexel.x, -halfTexel.y), lo, hi)) +
+    texture2D(tex, clamp(uv + vec2(-halfTexel.x,  halfTexel.y), lo, hi)) +
+    texture2D(tex, clamp(uv + vec2( halfTexel.x,  halfTexel.y), lo, hi))
+  ) * 0.25;
+}
+
+vec4 samplePyramidLevel(int idx, vec2 uv) {
+  if (idx <= 0) {
+    return texture2D(u_snapshot, clamp(uv, u_snapTexel, 1.0 - u_snapTexel));
   }
-  float r1 = u_frostPx * 0.55;
-  float r2 = u_frostPx * 1.15;
-  vec4 acc = sampleSnap(cssPos) * 0.22;
-  acc += sampleSnap(cssPos + vec2( r1,  0.0)) * 0.11;
-  acc += sampleSnap(cssPos + vec2(-r1,  0.0)) * 0.11;
-  acc += sampleSnap(cssPos + vec2( 0.0,  r1)) * 0.11;
-  acc += sampleSnap(cssPos + vec2( 0.0, -r1)) * 0.11;
-  acc += sampleSnap(cssPos + vec2( r2 * 0.7071,  r2 * 0.7071)) * 0.085;
-  acc += sampleSnap(cssPos + vec2(-r2 * 0.7071,  r2 * 0.7071)) * 0.085;
-  acc += sampleSnap(cssPos + vec2( r2 * 0.7071, -r2 * 0.7071)) * 0.085;
-  acc += sampleSnap(cssPos + vec2(-r2 * 0.7071, -r2 * 0.7071)) * 0.085;
+  vec2 h = u_snapTexel * exp2(float(idx));
+  if (idx == 1) return sampleTex4(u_blur1, uv, h);
+  if (idx == 2) return sampleTex4(u_blur2, uv, h);
+  if (idx == 3) return sampleTex4(u_blur3, uv, h);
+  if (idx == 4) return sampleTex4(u_blur4, uv, h);
+  return sampleTex4(u_blur5, uv, h);
+}
+
+vec4 sampleFrostedSnap(vec2 cssPos) {
+  vec2 uv = (u_snapOffset + cssPos) / u_snapSize;
+  if (u_frostPx <= 0.05) {
+    return texture2D(u_snapshot, clamp(uv, u_snapTexel, 1.0 - u_snapTexel));
+  }
+  float blurDevPx = u_frostPx * u_snapDpr;
+  float lvl = clamp(log2(1.0 + blurDevPx * 0.75), 0.0, 5.0);
+  int i0 = int(floor(lvl));
+  int i1 = i0 < 5 ? i0 + 1 : 5;
+  float f = lvl - float(i0);
+  vec4 c0 = samplePyramidLevel(i0, uv);
+  vec4 c1 = i1 == i0 ? c0 : samplePyramidLevel(i1, uv);
+  vec4 acc = mix(c0, c1, f);
   acc.rgb = applySat(acc.rgb, u_sat);
   return acc;
 }
@@ -195,22 +273,16 @@ void main() {
     float m1 = 1.0 - u_spread * 0.5;
     float m3 = 1.0 + u_spread * 0.5;
     float m4 = 1.0 + u_spread;
-    vec2 perp = vec2(-dir.y, dir.x) * (u_frostPx * 0.65);
 
-    vec4 s0 = sampleSnap(fragCss + disp * m0 + perp);
-    vec4 s1 = sampleSnap(fragCss + disp * m1 - perp * 0.75);
-    vec4 s2 = sampleSnap(fragCss + disp);
-    vec4 s3 = sampleSnap(fragCss + disp * m3 + perp * 0.75);
-    vec4 s4 = sampleSnap(fragCss + disp * m4 - perp);
+    vec4 s0 = sampleFrostedSnap(fragCss + disp * m0);
+    vec4 s1 = sampleFrostedSnap(fragCss + disp * m1);
+    vec4 s2 = sampleFrostedSnap(fragCss + disp);
+    vec4 s3 = sampleFrostedSnap(fragCss + disp * m3);
+    vec4 s4 = sampleFrostedSnap(fragCss + disp * m4);
 
     rgb.r = s0.r * 0.65 + s1.r * 0.35;
     rgb.g = s1.g * 0.22 + s2.g * 0.56 + s3.g * 0.22;
     rgb.b = s3.b * 0.35 + s4.b * 0.65;
-    if (hasFrost) {
-      vec3 avgRgb = (s0.rgb + s1.rgb + s2.rgb + s3.rgb + s4.rgb) * 0.2;
-      rgb = mix(rgb, avgRgb, clamp(u_frostPx / 12.0, 0.0, 0.42));
-      rgb = applySat(rgb, u_sat);
-    }
     sA = s2.a;
   }
 
@@ -236,6 +308,39 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
     return null
   }
   return shader
+}
+
+function createLinkedProgram(
+  gl: WebGLRenderingContext,
+  vertSrc: string,
+  fragSrc: string,
+): WebGLProgram | null {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vertSrc)
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragSrc)
+  if (!vs || !fs) {
+    if (vs) gl.deleteShader(vs)
+    if (fs) gl.deleteShader(fs)
+    return null
+  }
+
+  const program = gl.createProgram()
+  if (!program) {
+    gl.deleteShader(vs)
+    gl.deleteShader(fs)
+    return null
+  }
+  gl.attachShader(program, vs)
+  gl.attachShader(program, fs)
+  gl.bindAttribLocation(program, 0, 'a_pos')
+  gl.linkProgram(program)
+  gl.deleteShader(vs)
+  gl.deleteShader(fs)
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program)
+    return null
+  }
+  return program
 }
 
 function initGlState(): GlState | null {
@@ -264,30 +369,11 @@ function initGlState(): GlState | null {
     return null
   }
 
-  const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC)
-  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC)
-  if (!vs || !fs) {
-    if (vs) gl.deleteShader(vs)
-    if (fs) gl.deleteShader(fs)
-    glSupported = false
-    return null
-  }
-
-  const program = gl.createProgram()
-  if (!program) {
-    gl.deleteShader(vs)
-    gl.deleteShader(fs)
-    glSupported = false
-    return null
-  }
-  gl.attachShader(program, vs)
-  gl.attachShader(program, fs)
-  gl.linkProgram(program)
-  gl.deleteShader(vs)
-  gl.deleteShader(fs)
-
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    gl.deleteProgram(program)
+  const program = createLinkedProgram(gl, VERT_SRC, FRAG_SRC)
+  const downsampleProgram = createLinkedProgram(gl, DOWNSAMPLE_VERT_SRC, DOWNSAMPLE_FRAG_SRC)
+  if (!program || !downsampleProgram) {
+    if (program) gl.deleteProgram(program)
+    if (downsampleProgram) gl.deleteProgram(downsampleProgram)
     glSupported = false
     return null
   }
@@ -295,23 +381,29 @@ function initGlState(): GlState | null {
   const posBuf = gl.createBuffer()
   if (!posBuf) {
     gl.deleteProgram(program)
+    gl.deleteProgram(downsampleProgram)
     glSupported = false
     return null
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf)
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
 
-  const aPos = gl.getAttribLocation(program, 'a_pos')
-  gl.enableVertexAttribArray(aPos)
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
+  gl.enableVertexAttribArray(0)
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
   gl.useProgram(program)
 
   const state: GlState = {
     canvas,
     gl,
     program,
+    downsampleProgram,
     posBuf,
     uSnapshot: gl.getUniformLocation(program, 'u_snapshot'),
+    uBlur1: gl.getUniformLocation(program, 'u_blur1'),
+    uBlur2: gl.getUniformLocation(program, 'u_blur2'),
+    uBlur3: gl.getUniformLocation(program, 'u_blur3'),
+    uBlur4: gl.getUniformLocation(program, 'u_blur4'),
+    uBlur5: gl.getUniformLocation(program, 'u_blur5'),
     uSize: gl.getUniformLocation(program, 'u_size'),
     uHalfSize: gl.getUniformLocation(program, 'u_halfSize'),
     uBoxHalf: gl.getUniformLocation(program, 'u_boxHalf'),
@@ -322,11 +414,14 @@ function initGlState(): GlState | null {
     uSnapOffset: gl.getUniformLocation(program, 'u_snapOffset'),
     uSnapSize: gl.getUniformLocation(program, 'u_snapSize'),
     uSnapTexel: gl.getUniformLocation(program, 'u_snapTexel'),
+    uSnapDpr: gl.getUniformLocation(program, 'u_snapDpr'),
     uDispCssPx: gl.getUniformLocation(program, 'u_dispCssPx'),
     uSpread: gl.getUniformLocation(program, 'u_spread'),
     uFrostPx: gl.getUniformLocation(program, 'u_frostPx'),
     uSat: gl.getUniformLocation(program, 'u_sat'),
     uTint: gl.getUniformLocation(program, 'u_tint'),
+    uDsSrc: gl.getUniformLocation(downsampleProgram, 'u_src'),
+    uDsTexel: gl.getUniformLocation(downsampleProgram, 'u_srcTexel'),
     textures: new WeakMap(),
     contextLost: false,
   }
@@ -381,6 +476,86 @@ export function parseCssColorRgba(color: string): [number, number, number, numbe
   ]
 }
 
+const PYRAMID_LEVELS = 5
+
+function ensureBlurPyramid(state: GlState, texEntry: CachedSnapTexture): boolean {
+  const { gl } = state
+  if (texEntry.blurVersion === texEntry.version && texEntry.blurLevels) {
+    return true
+  }
+
+  let levels = texEntry.blurLevels
+  if (!levels) {
+    levels = []
+    for (let i = 0; i < PYRAMID_LEVELS; i++) {
+      const tex = gl.createTexture()
+      const fbo = gl.createFramebuffer()
+      if (!tex || !fbo) {
+        if (tex) gl.deleteTexture(tex)
+        if (fbo) gl.deleteFramebuffer(fbo)
+        for (const l of levels) {
+          gl.deleteTexture(l.tex)
+          gl.deleteFramebuffer(l.fbo)
+        }
+        return false
+      }
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      levels.push({ tex, fbo, width: 0, height: 0 })
+    }
+    texEntry.blurLevels = levels
+  }
+
+  gl.disable(gl.SCISSOR_TEST)
+  gl.disable(gl.BLEND)
+  gl.useProgram(state.downsampleProgram)
+  gl.activeTexture(gl.TEXTURE0)
+  gl.uniform1i(state.uDsSrc, 0)
+
+  let srcTex = texEntry.tex
+  let srcW = texEntry.width
+  let srcH = texEntry.height
+
+  for (let i = 0; i < PYRAMID_LEVELS; i++) {
+    const level = levels[i]
+    const dstW = Math.max(1, Math.ceil(srcW * 0.5))
+    const dstH = Math.max(1, Math.ceil(srcH * 0.5))
+
+    if (level.width !== dstW || level.height !== dstH) {
+      gl.bindTexture(gl.TEXTURE_2D, level.tex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, dstW, dstH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, level.fbo)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, level.tex, 0)
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.useProgram(state.program)
+        return false
+      }
+      level.width = dstW
+      level.height = dstH
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, level.fbo)
+    }
+
+    gl.viewport(0, 0, dstW, dstH)
+    gl.bindTexture(gl.TEXTURE_2D, srcTex)
+    gl.uniform2f(state.uDsTexel, 1 / srcW, 1 / srcH)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+
+    srcTex = level.tex
+    srcW = dstW
+    srcH = dstH
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  gl.useProgram(state.program)
+  texEntry.blurVersion = texEntry.version
+  return true
+}
+
 export function renderRefractedBevelWebGL(
   targetCtx: CanvasRenderingContext2D,
   field: WebGLBevelParams,
@@ -408,6 +583,7 @@ export function renderRefractedBevelWebGL(
     canvas.height = Math.max(canvas.height, bufHeight)
   }
 
+  gl.activeTexture(gl.TEXTURE0)
   let texEntry = state.textures.get(snapshot.canvas)
   if (!texEntry) {
     const tex = gl.createTexture()
@@ -417,7 +593,7 @@ export function renderRefractedBevelWebGL(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    texEntry = { tex, version: -1, width: 0, height: 0 }
+    texEntry = { tex, version: -1, width: 0, height: 0, blurLevels: null, blurVersion: -1 }
     state.textures.set(snapshot.canvas, texEntry)
   } else {
     gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
@@ -438,6 +614,21 @@ export function renderRefractedBevelWebGL(
     texEntry.height = snapshot.height
   }
 
+  const frostClamped = frost < 0 ? 0 : frost > 100 ? 100 : frost
+  const frostPx = frostClamped * 0.2
+  const hasBlurPyramid = frostPx > 0.05 && ensureBlurPyramid(state, texEntry)
+
+  gl.activeTexture(gl.TEXTURE0)
+  gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
+  for (let i = 0; i < PYRAMID_LEVELS; i++) {
+    gl.activeTexture(gl.TEXTURE1 + i)
+    gl.bindTexture(
+      gl.TEXTURE_2D,
+      hasBlurPyramid && texEntry.blurLevels ? texEntry.blurLevels[i].tex : texEntry.tex,
+    )
+  }
+  gl.activeTexture(gl.TEXTURE0)
+
   gl.viewport(0, 0, bufWidth, bufHeight)
   gl.enable(gl.SCISSOR_TEST)
   gl.scissor(0, 0, bufWidth, bufHeight)
@@ -450,6 +641,11 @@ export function renderRefractedBevelWebGL(
   const by = Math.max(0, hh - field.borderRadius)
 
   gl.uniform1i(state.uSnapshot, 0)
+  gl.uniform1i(state.uBlur1, 1)
+  gl.uniform1i(state.uBlur2, 2)
+  gl.uniform1i(state.uBlur3, 3)
+  gl.uniform1i(state.uBlur4, 4)
+  gl.uniform1i(state.uBlur5, 5)
   gl.uniform2f(state.uSize, field.width, field.height)
   gl.uniform2f(state.uHalfSize, hw, hh)
   gl.uniform2f(state.uBoxHalf, bx, by)
@@ -460,10 +656,10 @@ export function renderRefractedBevelWebGL(
   gl.uniform2f(state.uSnapOffset, offsetX, offsetY)
   gl.uniform2f(state.uSnapSize, snapshot.cssWidth, snapshot.cssHeight)
   gl.uniform2f(state.uSnapTexel, 0.5 / snapshot.width, 0.5 / snapshot.height)
-  const frostClamped = frost < 0 ? 0 : frost > 100 ? 100 : frost
+  gl.uniform1f(state.uSnapDpr, snapshot.cssWidth > 0 ? snapshot.width / snapshot.cssWidth : 1)
   gl.uniform1f(state.uDispCssPx, dispCssPx)
   gl.uniform1f(state.uSpread, spread)
-  gl.uniform1f(state.uFrostPx, frostClamped * 0.2)
+  gl.uniform1f(state.uFrostPx, hasBlurPyramid ? frostPx : 0)
   gl.uniform1f(state.uSat, 1 + frostClamped * 0.008)
   if (tintRgba) {
     gl.uniform4f(state.uTint, tintRgba[0], tintRgba[1], tintRgba[2], tintRgba[3])
