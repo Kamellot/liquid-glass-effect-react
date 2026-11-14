@@ -174,7 +174,9 @@ export function buildBevelHash(spec: BevelSpec): string {
 export function chooseRenderScale(width: number, height: number, depth: number): number {
   const maxDpr = typeof window !== 'undefined' ? clamp(window.devicePixelRatio || 1, 1, 2) : 1
   if (isWebGLRefractionAvailable()) {
-    return Math.round(maxDpr * 4) / 4
+    const area = width * height
+    const areaCap = area > 450_000 ? 0.75 : area > 180_000 ? 1 : area > 80_000 ? 1.5 : maxDpr
+    return Math.round(Math.min(maxDpr, areaCap) * 4) / 4
   }
   const effectiveDepth = clamp(depth, 0, Math.min(width, height) * 0.5)
   const approxBevelPx = Math.min(width * height, 2 * (width + height) * effectiveDepth)

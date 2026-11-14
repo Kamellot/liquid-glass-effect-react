@@ -19,6 +19,12 @@ import {
   type BevelField,
 } from './refractionEngine'
 import { isWebGLRefractionAvailable } from './webglRefraction'
+import {
+  cancelGlassDraw,
+  observeGlassIntersection,
+  observeGlassResize,
+  scheduleGlassDraw,
+} from './glassScheduler'
 import { useLiquidGlassConfig } from './LiquidGlassContext'
 import { DEFAULTS, FIGMA_MATERIAL_DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
@@ -158,10 +164,12 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
 
     update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    if (el.parentElement) ro.observe(el.parentElement)
-    return () => ro.disconnect()
+    const unsubEl = observeGlassResize(el, update)
+    const unsubParent = el.parentElement ? observeGlassResize(el.parentElement, update) : undefined
+    return () => {
+      unsubEl()
+      unsubParent?.()
+    }
   }, [mode, explicitSize, isStandalone, className, style?.borderRadius, borderRadiusProp])
 
   const drawFrame = useCallback(() => {
@@ -180,6 +188,22 @@ export const LiquidGlass = memo(function LiquidGlass({
       return
     }
 
+    const rootRect = root.getBoundingClientRect()
+    if (
+      typeof window !== 'undefined' &&
+      window.innerHeight > 0 &&
+      (rootRect.bottom < -200 || rootRect.top > window.innerHeight + 200)
+    ) {
+      isVisibleRef.current = false
+      if (!root.hasAttribute('data-lg-offscreen')) {
+        root.setAttribute('data-lg-offscreen', '1')
+      }
+      return
+    }
+    if (root.hasAttribute('data-lg-offscreen')) {
+      root.removeAttribute('data-lg-offscreen')
+    }
+
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
@@ -194,7 +218,6 @@ export const LiquidGlass = memo(function LiquidGlass({
       return
     }
 
-    const rootRect = root.getBoundingClientRect()
     const targetRect = targetEl.getBoundingClientRect()
     const offsetX = rootRect.left - targetRect.left
     const offsetY = rootRect.top - targetRect.top
@@ -311,9 +334,11 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
   }, [targetEl, metrics, depth, splay, drawFrame])
 
-  // Redraw immediately when refraction/dispersion change without regenerating the bevel field
+  // Redraw when refraction/dispersion change without regenerating the bevel field
   useLayoutEffect(() => {
-    drawFrame()
+    if (rootRef.current) {
+      scheduleGlassDraw(rootRef.current, drawFrame)
+    }
     const field = fieldRef.current
     if (field && onMapUpdateRef.current && targetEl) {
       const dataUrl = generateDisplacementMap({
@@ -382,27 +407,30 @@ export const LiquidGlass = memo(function LiquidGlass({
       drawFrame()
     }
 
-    const unsubSnapshot = subscribeTargetSnapshot(targetEl, drawFrame, root)
+    const scheduleDraw = () => {
+      if (!isVisibleRef.current) return
+      scheduleGlassDraw(root, drawFrame)
+    }
+
+    const unsubSnapshot = subscribeTargetSnapshot(targetEl, scheduleDraw, root)
     syncTint()
     drawFrame()
 
-    let io: IntersectionObserver | null = null
-    if (typeof IntersectionObserver !== 'undefined') {
-      io = new IntersectionObserver(
-        (entries) => {
-          const hit = entries[entries.length - 1]
-          if (!hit) return
-          const wasVisible = isVisibleRef.current
-          isVisibleRef.current = hit.isIntersecting
-          if (hit.isIntersecting && !wasVisible) {
-            syncTint()
-            drawFrame()
-          }
-        },
-        { rootMargin: '150px' },
-      )
-      io.observe(root)
-    }
+    const unsubIo = observeGlassIntersection(root, (isIntersecting) => {
+      const wasVisible = isVisibleRef.current
+      isVisibleRef.current = isIntersecting
+      if (isIntersecting) {
+        if (root.hasAttribute('data-lg-offscreen')) {
+          root.removeAttribute('data-lg-offscreen')
+        }
+        if (!wasVisible) {
+          syncTint()
+          scheduleGlassDraw(root, drawFrame)
+        }
+      } else if (!root.hasAttribute('data-lg-offscreen')) {
+        root.setAttribute('data-lg-offscreen', '1')
+      }
+    })
 
     const needsScrollSync = (() => {
       if (!targetEl.contains(root)) return true
@@ -415,18 +443,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       return false
     })()
 
-    const scheduleScrollDraw = () => {
-      if (!isVisibleRef.current) return
-      if (!scrollRaf) {
-        scrollRaf = requestAnimationFrame(() => {
-          scrollRaf = 0
-          drawFrame()
-        })
-      }
-    }
-
-    const posRo = new ResizeObserver(drawFrame)
-    posRo.observe(root)
+    const unsubRo = observeGlassResize(root, scheduleDraw)
 
     // Synchronous redraw inside mutation microtask ensures zero trailing during translate3d drag
     const ancestorMo = new MutationObserver(() => {
@@ -437,17 +454,9 @@ export const LiquidGlass = memo(function LiquidGlass({
     })
 
     const parentEl = root.parentElement
-    ancestorMo.observe(root, { attributes: true })
-    if (parentEl && parentEl !== document.documentElement) {
-      ancestorMo.observe(parentEl, { attributes: true })
-    }
-    let cur: HTMLElement | null = parentEl?.parentElement ?? null
-    while (cur && cur !== document.documentElement) {
-      ancestorMo.observe(cur, {
-        attributes: true,
-        attributeFilter: ['style', 'class'],
-      })
-      cur = cur.parentElement
+    ancestorMo.observe(root, { attributes: true, attributeFilter: ['style', 'class'] })
+    if (parentEl && parentEl !== targetEl && parentEl !== document.documentElement) {
+      ancestorMo.observe(parentEl, { attributes: true, attributeFilter: ['style', 'class'] })
     }
 
     root.addEventListener('transitionrun', startAnimLoop)
@@ -457,16 +466,17 @@ export const LiquidGlass = memo(function LiquidGlass({
     parentEl?.addEventListener('transitionend', onTransitionFinish)
     parentEl?.addEventListener('transitioncancel', onTransitionFinish)
     if (needsScrollSync) {
-      window.addEventListener('scroll', scheduleScrollDraw, { passive: true, capture: true })
+      window.addEventListener('scroll', scheduleDraw, { passive: true, capture: true })
     }
-    window.addEventListener('resize', scheduleScrollDraw, { passive: true })
+    window.addEventListener('resize', scheduleDraw, { passive: true })
 
     return () => {
       if (scrollRaf) cancelAnimationFrame(scrollRaf)
+      cancelGlassDraw(root)
       stopAnimLoop()
       unsubSnapshot()
-      io?.disconnect()
-      posRo.disconnect()
+      unsubIo()
+      unsubRo()
       ancestorMo.disconnect()
       root.removeEventListener('transitionrun', startAnimLoop)
       root.removeEventListener('transitionend', onTransitionFinish)
@@ -475,9 +485,9 @@ export const LiquidGlass = memo(function LiquidGlass({
       parentEl?.removeEventListener('transitionend', onTransitionFinish)
       parentEl?.removeEventListener('transitioncancel', onTransitionFinish)
       if (needsScrollSync) {
-        window.removeEventListener('scroll', scheduleScrollDraw, true)
+        window.removeEventListener('scroll', scheduleDraw, true)
       }
-      window.removeEventListener('resize', scheduleScrollDraw)
+      window.removeEventListener('resize', scheduleDraw)
     }
   }, [targetEl, mode, tint, drawFrame])
 

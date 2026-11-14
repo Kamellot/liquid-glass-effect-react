@@ -24,6 +24,8 @@ interface ConsumerRecord {
   compVersion: number
   compSnapshot: TargetSnapshot | null
   lastOverlappedScopes: Set<HTMLElement>
+  cachedRect: DOMRect | null
+  cachedRectAt: number
 }
 
 interface SnapshotEntry {
@@ -1016,9 +1018,18 @@ function rectsOverlap(a: DOMRect, b: DOMRect, margin: number): boolean {
   )
 }
 
+function getScopeRect(rec: ConsumerRecord, now: number): DOMRect | null {
+  if (!rec.scopeEl) return null
+  if (rec.cachedRect && now - rec.cachedRectAt < 12) return rec.cachedRect
+  const rect = rec.scopeEl.getBoundingClientRect()
+  rec.cachedRect = rect
+  rec.cachedRectAt = now
+  return rect
+}
+
 function getOrderedConsumers(entry: SnapshotEntry): ConsumerRecord[] {
   const list = Array.from(entry.consumers.values())
-  if (list.length <= 1) return list
+  if (list.length <= 1 || list.length > 16) return list
   list.sort((a, b) => {
     if (!a.scopeEl || !b.scopeEl) return 0
     return comparePaintOrder(a.scopeEl, b.scopeEl, entry.target)
@@ -1030,19 +1041,26 @@ function notifyScopesAbove(entry: SnapshotEntry, scopes: Iterable<HTMLElement>):
   const scopeSet = new Set(scopes)
   if (scopeSet.size === 0 || entry.consumers.size <= 1) return
 
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const scopeRects = new Map<HTMLElement, DOMRect>()
+  for (const s of scopeSet) {
+    scopeRects.set(s, s.getBoundingClientRect())
+  }
+
   const toNotify: ConsumerRecord[] = []
   for (const rec of entry.consumers.values()) {
     if (!rec.scopeEl) continue
+    const recRect = getScopeRect(rec, now)
+    if (!recRect) continue
     for (const scopeEl of scopeSet) {
       if (rec.scopeEl === scopeEl) continue
-      if (comparePaintOrder(scopeEl, rec.scopeEl, entry.target) < 0) {
-        const overlaps =
-          rec.lastOverlappedScopes.has(scopeEl) ||
-          rectsOverlap(scopeEl.getBoundingClientRect(), rec.scopeEl.getBoundingClientRect(), OVERLAP_MARGIN)
-        if (overlaps) {
-          toNotify.push(rec)
-          break
-        }
+      const scopeRect = scopeRects.get(scopeEl)!
+      const overlaps =
+        rec.lastOverlappedScopes.has(scopeEl) ||
+        rectsOverlap(scopeRect, recRect, OVERLAP_MARGIN)
+      if (overlaps && comparePaintOrder(scopeEl, rec.scopeEl, entry.target) < 0) {
+        toNotify.push(rec)
+        break
       }
     }
   }
@@ -1143,7 +1161,8 @@ export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | nu
   }
   if (!consumerRec) return base
 
-  const consumerRect = consumerScope.getBoundingClientRect()
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const consumerRect = getScopeRect(consumerRec, now) ?? consumerScope.getBoundingClientRect()
   const lowerScopes: HTMLElement[] = []
   const seenScopes = new Set<HTMLElement>()
   const skipElements = new Set<Element>([consumerScope, rootEl])
@@ -1151,6 +1170,9 @@ export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | nu
   for (const rec of entry.consumers.values()) {
     const otherScope = rec.scopeEl
     if (!otherScope || otherScope === consumerScope) continue
+    const otherRect = getScopeRect(rec, now)
+    if (!otherRect || !rectsOverlap(otherRect, consumerRect, OVERLAP_MARGIN)) continue
+
     const order = comparePaintOrder(otherScope, consumerScope, target)
     if (order >= 0) {
       skipElements.add(otherScope)
@@ -1158,9 +1180,7 @@ export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | nu
     }
     if (seenScopes.has(otherScope)) continue
     seenScopes.add(otherScope)
-    if (rectsOverlap(otherScope.getBoundingClientRect(), consumerRect, OVERLAP_MARGIN)) {
-      lowerScopes.push(otherScope)
-    }
+    lowerScopes.push(otherScope)
   }
 
   consumerRec.lastOverlappedScopes = new Set(lowerScopes)
@@ -1329,6 +1349,8 @@ export function subscribeTargetSnapshot(
     compVersion: 0,
     compSnapshot: null,
     lastOverlappedScopes: new Set(),
+    cachedRect: null,
+    cachedRectAt: 0,
   })
   if (!entry.snapshot) captureSnapshotNow(entry)
 

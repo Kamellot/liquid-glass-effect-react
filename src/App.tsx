@@ -5,6 +5,7 @@ import { BentoTestScene } from './demo/BentoTestScene'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
 import { PerfObserverHud } from './demo/PerfObserverHud'
+import { StressTestScene } from './demo/StressTestScene'
 import { VideoScene } from './demo/VideoScene'
 import { DEFAULT_PARAMS, type DemoParams } from './demo/presets'
 
@@ -48,6 +49,7 @@ export default function App() {
         <VideoScene glass={dock} />
         <DockScene glass={dock} />
         <BentoTestScene glass={dock} />
+        <StressTestScene glass={dock} />
 
         <footer className="foot">
           <p>
