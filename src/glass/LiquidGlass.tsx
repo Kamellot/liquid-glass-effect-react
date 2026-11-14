@@ -1,71 +1,186 @@
 import {
+  createContext,
   forwardRef,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type MutableRefObject,
-  type Ref,
 } from 'react'
-import {
-  DEFAULT_GLASS_CONFIG,
-  FROST_BLUR_SCALE,
-  FROST_MIN_THRESHOLD,
-  FROST_SATURATION_SCALE,
-  GLOW_MIN_THRESHOLD,
-  LIGHT_INTENSITY_MIN_THRESHOLD,
-  OFFSET_EPSILON_PX,
-  OFFSCREEN_MARGIN_PX,
-  OPTICAL_MATERIAL_DEFAULTS,
-  REDUCED_MOTION_DISPLACEMENT_SCALE,
-  REFRACTION_MIN_THRESHOLD,
-  TRANSITION_LOOP_DURATION_MS,
-} from './constants'
-import {
-  getTargetSnapshot,
-  notifyGlassRedrawn,
-  subscribeTargetSnapshot,
-} from './domSnapshot'
-import {
-  cancelGlassDraw,
-  observeGlassIntersection,
-  observeGlassResize,
-  scheduleGlassDraw,
-} from './glassScheduler'
-import { useLiquidGlassConfig } from './LiquidGlassContext'
 import {
   acquireBevelField,
   chooseRenderScale,
+  clamp,
+  DEFAULT_GLASS_CONFIG,
+  degToRad,
   generateDisplacementMap,
+  isTransparentColor,
+  isWebGLRefractionAvailable,
+  measureElementBox,
+  notifyGlassRedrawn,
+  nowMs,
+  OPTICAL_MATERIAL_DEFAULTS,
+  REDUCED_MOTION_DISPLACEMENT_SCALE,
   releaseBevelField,
   renderRefractedBevel,
-  type BevelField,
-  type DisplacementMapSpec,
-} from './refractionEngine'
+  resolveTarget,
+  subscribeTargetSnapshot,
+  getTargetSnapshot,
+} from './engine'
 import type {
+  BevelField,
   DisplacementMapInfo,
+  DisplacementMapSpec,
+  LiquidGlassGlobalConfig,
   LiquidGlassMode,
   LiquidGlassProps,
+  LiquidGlassProviderProps,
 } from './types'
-import {
-  clamp,
-  degToRad,
-  isTransparentColor,
-  measureElementBox,
-  nowMs,
-  resolveTarget,
-  type BoxMetrics,
-} from './utils'
-import { isWebGLRefractionAvailable } from './webglRefraction'
 import './LiquidGlass.css'
+
+// ── Global configuration store & optional Context provider ───────────────────
+
+let globalStoreConfig: LiquidGlassGlobalConfig | undefined
+const configListeners = new Set<() => void>()
+const subscribeConfig = (fn: () => void) => {
+  configListeners.add(fn)
+  return () => {
+    configListeners.delete(fn)
+  }
+}
+const getConfigSnapshot = () => globalStoreConfig
+
+export function configureLiquidGlass(config: LiquidGlassGlobalConfig, options?: { replace?: boolean }): void {
+  globalStoreConfig = options?.replace ? { ...config } : { ...globalStoreConfig, ...config }
+  configListeners.forEach((fn) => fn())
+}
+
+export function resetLiquidGlassConfig(): void {
+  globalStoreConfig = undefined
+  configListeners.forEach((fn) => fn())
+}
+
+export const getLiquidGlassConfig = (): LiquidGlassGlobalConfig | undefined => globalStoreConfig
+
+const LiquidGlassContext = createContext<LiquidGlassGlobalConfig | undefined>(undefined)
+
+export function LiquidGlassProvider({ value, config, inherit = true, children }: LiquidGlassProviderProps) {
+  const parent = useContext(LiquidGlassContext)
+  const local = value ?? config
+  const merged = useMemo(
+    () => (!inherit || !parent ? local : !local ? parent : { ...parent, ...local }),
+    [inherit, parent, local],
+  )
+  return <LiquidGlassContext.Provider value={merged}>{children}</LiquidGlassContext.Provider>
+}
+
+export function useLiquidGlassConfig(): LiquidGlassGlobalConfig | undefined {
+  const store = useSyncExternalStore(subscribeConfig, getConfigSnapshot, getConfigSnapshot)
+  const ctx = useContext(LiquidGlassContext)
+  return useMemo(() => (!store && !ctx ? undefined : !store ? ctx : !ctx ? store : { ...store, ...ctx }), [store, ctx])
+}
+
+// ── Shared observers & frame-budgeted draw batcher ───────────────────────────
+
+function createSharedObserver<T>(
+  factory: (cbs: WeakMap<Element, Set<T>>) => { observe: (el: Element) => void; unobserve: (el: Element) => void } | null,
+) {
+  const cbs = new WeakMap<Element, Set<T>>()
+  let obs: { observe: (el: Element) => void; unobserve: (el: Element) => void } | null = null
+  return (el: Element, cb: T) => {
+    if (!obs) obs = factory(cbs)
+    if (!obs) return () => {}
+    let set = cbs.get(el)
+    if (!set) {
+      set = new Set()
+      cbs.set(el, set)
+      obs.observe(el)
+    }
+    set.add(cb)
+    return () => {
+      const cur = cbs.get(el)
+      if (!cur) return
+      cur.delete(cb)
+      if (!cur.size) {
+        cbs.delete(el)
+        obs?.unobserve(el)
+      }
+    }
+  }
+}
+
+const observeIntersection = createSharedObserver<(isIntersecting: boolean) => void>((cbs) =>
+  typeof IntersectionObserver === 'undefined'
+    ? null
+    : new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) cbs.get(e.target)?.forEach((cb) => cb(e.isIntersecting))
+        },
+        { rootMargin: '150px' },
+      ),
+)
+
+const observeResize = createSharedObserver<() => void>((cbs) =>
+  typeof ResizeObserver === 'undefined'
+    ? null
+    : new ResizeObserver((entries) => {
+        for (const e of entries) cbs.get(e.target)?.forEach((cb) => cb())
+      }),
+)
+
+const pendingDraws = new Map<object, () => void>()
+let batchRaf = 0
+
+function flushBatch(): void {
+  batchRaf = 0
+  if (!pendingDraws.size) return
+  const start = nowMs()
+  let processed = 0
+  for (const [key, fn] of pendingDraws) {
+    pendingDraws.delete(key)
+    fn()
+    if (++processed >= 4 && pendingDraws.size && nowMs() - start >= 5) {
+      batchRaf = requestAnimationFrame(flushBatch)
+      return
+    }
+  }
+}
+
+function scheduleDraw(key: object, fn: () => void): void {
+  pendingDraws.set(key, fn)
+  if (!batchRaf && typeof requestAnimationFrame !== 'undefined') batchRaf = requestAnimationFrame(flushBatch)
+}
+
+function cancelDraw(key: object): void {
+  pendingDraws.delete(key)
+  if (!pendingDraws.size && batchRaf && typeof cancelAnimationFrame !== 'undefined') {
+    cancelAnimationFrame(batchRaf)
+    batchRaf = 0
+  }
+}
+
+type RuntimeState = {
+  field: BevelField | null
+  outImg: ImageData | null
+  tint: string
+  visible: boolean
+  last: LastDraw | null
+  reduced: boolean
+  refraction: number
+  dispersion: number
+  frost: number
+  onMapUpdate: LiquidGlassProps['onMapUpdate']
+}
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
-interface LastDrawState {
+type LastDraw = {
   version: number
   offsetX: number
   offsetY: number
@@ -76,52 +191,23 @@ interface LastDrawState {
   fieldHash: string
 }
 
-function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
-  if (!ref) return
-  if (typeof ref === 'function') {
-    ref(value)
-    return
-  }
-  ;(ref as MutableRefObject<T | null>).current = value
-}
-
-function usePrefersReducedMotion(): boolean {
-  // Always start false so SSR markup and initial client hydration match cleanly.
-  const [reduced, setReduced] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setReduced(mql.matches)
-    const onChange = (event: MediaQueryListEvent) => setReduced(event.matches)
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
-  }, [])
-
-  return reduced
-}
-
 function setOffscreenAttr(root: HTMLElement, offscreen: boolean): void {
-  const hasAttr = root.hasAttribute('data-lg-offscreen')
-  if (offscreen && !hasAttr) {
-    root.setAttribute('data-lg-offscreen', '1')
-  } else if (!offscreen && hasAttr) {
-    root.removeAttribute('data-lg-offscreen')
+  if (offscreen !== root.hasAttribute('data-lg-offscreen')) {
+    offscreen ? root.setAttribute('data-lg-offscreen', '1') : root.removeAttribute('data-lg-offscreen')
   }
 }
 
 function emitMapUpdate(
-  callback: ((info: DisplacementMapInfo) => void) | undefined,
+  cb: ((info: DisplacementMapInfo) => void) | undefined,
   fieldId: string | null,
   spec: DisplacementMapSpec,
   hash: string,
   precomputedUrl?: string,
 ): void {
-  if (!callback) return
-  const dataUrl = precomputedUrl ?? generateDisplacementMap(spec)
-  callback({
+  if (!cb) return
+  cb({
     fieldId,
-    dataUrl: dataUrl || null,
+    dataUrl: (precomputedUrl ?? generateDisplacementMap(spec)) || null,
     width: spec.width,
     height: spec.height,
     borderRadius: spec.borderRadius,
@@ -129,106 +215,24 @@ function emitMapUpdate(
   })
 }
 
-function resolveFillLayerStyle(
-  fill: LiquidGlassProps['fill'],
-  fillOverlay: LiquidGlassProps['fillOverlay'],
-  shadow: LiquidGlassProps['shadow'],
-): CSSProperties | null {
-  const hasFill = fill !== undefined && fill !== false
-  const baseFill =
-    fill === true ? OPTICAL_MATERIAL_DEFAULTS.fill : typeof fill === 'string' ? fill : undefined
-  const overlay =
-    fillOverlay === 'none' || fillOverlay === 'transparent'
-      ? undefined
-      : (fillOverlay ?? (hasFill ? OPTICAL_MATERIAL_DEFAULTS.fillOverlay : undefined))
-  const resolvedShadow =
-    shadow === false || shadow === 'none'
-      ? undefined
-      : typeof shadow === 'string'
-        ? shadow
-        : shadow === true || hasFill
-          ? OPTICAL_MATERIAL_DEFAULTS.shadow
-          : undefined
-
-  if (!baseFill && !overlay && !resolvedShadow) return null
-
-  const layerStyle: CSSProperties = {}
-  if (baseFill) layerStyle.backgroundColor = baseFill
-  if (overlay) layerStyle.backgroundImage = `linear-gradient(${overlay}, ${overlay})`
-  if (resolvedShadow) layerStyle.boxShadow = resolvedShadow
-  return layerStyle
-}
-
-function buildRootStyle(
-  frost: number,
-  lightAngle: number,
-  lightIntensity: number,
-  glow: number,
-  explicitSize: number | undefined,
-  borderRadiusProp: CSSProperties['borderRadius'],
-  tint: string | undefined,
-  style: CSSProperties | undefined,
-): CSSProperties {
-  // lightAngle 0 points straight down from the top edge; subtract 90deg to convert CSS clockwise
-  // bearings to standard trigonometric coordinates for the specular rim vector.
-  const rad = degToRad(lightAngle - 90)
-  const lx = Math.cos(rad)
-  const ly = Math.sin(rad)
-  const frostAmt = clamp(frost, 0, 100)
-  const light = clamp(lightIntensity, 0, 100) / 50
-  const glowAmt = clamp(glow, 0, 100) / 100
-
-  const vars: Record<string, string | number> = {
-    '--lg-frost-blur': `${(frostAmt * FROST_BLUR_SCALE).toFixed(2)}px`,
-    '--lg-frost-sat': `${(100 + frostAmt * FROST_SATURATION_SCALE).toFixed(1)}%`,
-    '--lg-light-angle': `${lightAngle}deg`,
-    '--lg-light': light.toFixed(3),
-    '--lg-glow': glowAmt.toFixed(3),
-    '--lg-lx': lx.toFixed(4),
-    '--lg-ly': ly.toFixed(4),
-  }
-
-  return {
-    ...(explicitSize !== undefined
-      ? { width: explicitSize, height: explicitSize, borderRadius: '50%' }
-      : {}),
-    ...(borderRadiusProp !== undefined ? { borderRadius: borderRadiusProp } : {}),
-    ...(tint !== undefined ? { backgroundColor: tint } : {}),
-    ...style,
-    ...vars,
-  } as CSSProperties
-}
-
-function needsScrollSynchronization(targetEl: HTMLElement, root: HTMLElement): boolean {
+function needsScrollSync(targetEl: HTMLElement, root: HTMLElement): boolean {
   if (!targetEl.contains(root)) return true
-  let node: HTMLElement | null = root
-  while (node && node !== targetEl) {
-    const pos = getComputedStyle(node).position
+  for (let n: HTMLElement | null = root; n && n !== targetEl; n = n.parentElement) {
+    const pos = getComputedStyle(n).position
     if (pos === 'fixed' || pos === 'sticky') return true
-    node = node.parentElement
   }
   return false
 }
 
 function resolveSurfaceTint(root: HTMLElement, mode: LiquidGlassMode, tint?: string): string {
-  if (tint !== undefined && tint.trim().startsWith('rgb')) {
-    return isTransparentColor(tint) ? '' : tint
-  }
-  const source = tint !== undefined || mode !== 'layer' ? root : root.parentElement
-  if (!source) return ''
-  const bg = getComputedStyle(source).backgroundColor
+  if (tint !== undefined && tint.trim().startsWith('rgb')) return isTransparentColor(tint) ? '' : tint
+  const src = tint !== undefined || mode !== 'layer' ? root : root.parentElement
+  if (!src) return ''
+  const bg = getComputedStyle(src).backgroundColor
   return isTransparentColor(bg) ? '' : bg
 }
 
-function isElementVisibleForDraw(root: HTMLElement): boolean {
-  const candidate = root as HTMLElement & {
-    checkVisibility?: (opts?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean
-  }
-  if (typeof candidate.checkVisibility === 'function') {
-    return candidate.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
-  }
-  return true
-}
+// ── <LiquidGlass /> ──────────────────────────────────────────────────────────
 
 export const LiquidGlass = memo(
   forwardRef<HTMLDivElement, LiquidGlassProps>(function LiquidGlass(
@@ -261,92 +265,95 @@ export const LiquidGlass = memo(
     forwardedRef,
   ) {
     const globalConfig = useLiquidGlassConfig()
-    const activeGlobal = ignoreGlobal ? undefined : globalConfig
-    const prefersReducedMotion = usePrefersReducedMotion()
+    const g = ignoreGlobal ? undefined : globalConfig
 
-    const size = sizeProp ?? activeGlobal?.size
-    const baseRefraction = refractionProp ?? activeGlobal?.refraction ?? DEFAULT_GLASS_CONFIG.refraction
-    const depth = depthProp ?? activeGlobal?.depth ?? DEFAULT_GLASS_CONFIG.depth
-    const baseDispersion = dispersionProp ?? activeGlobal?.dispersion ?? DEFAULT_GLASS_CONFIG.dispersion
-    const frost = frostProp ?? activeGlobal?.frost ?? DEFAULT_GLASS_CONFIG.frost
-    const splay = splayProp ?? activeGlobal?.splay ?? DEFAULT_GLASS_CONFIG.splay
-    const lightMode = lightModeProp ?? activeGlobal?.lightMode ?? DEFAULT_GLASS_CONFIG.lightMode
-    const lightAngle = lightAngleProp ?? activeGlobal?.lightAngle ?? DEFAULT_GLASS_CONFIG.lightAngle
-    const lightIntensity =
-      lightIntensityProp ?? activeGlobal?.lightIntensity ?? DEFAULT_GLASS_CONFIG.lightIntensity
-    const glow = glowProp ?? activeGlobal?.glow ?? DEFAULT_GLASS_CONFIG.glow
-    const borderRadiusProp = borderRadiusPropProp ?? activeGlobal?.borderRadius
-    const tint = tintProp ?? activeGlobal?.tint
-    const fill = fillProp ?? activeGlobal?.fill
-    const fillOverlay = fillOverlayProp ?? activeGlobal?.fillOverlay
-    const shadow = shadowProp ?? activeGlobal?.shadow
+    // Start false so SSR markup and initial client hydration match cleanly.
+    const [reducedMotion, setReducedMotion] = useState(false)
+    useEffect(() => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+      const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+      setReducedMotion(mql.matches)
+      const onChange = (e: MediaQueryListEvent) => setReducedMotion(e.matches)
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    }, [])
 
-    const refraction = prefersReducedMotion
-      ? baseRefraction * REDUCED_MOTION_DISPLACEMENT_SCALE
-      : baseRefraction
-    const dispersion = prefersReducedMotion
-      ? baseDispersion * REDUCED_MOTION_DISPLACEMENT_SCALE
-      : baseDispersion
+    const size = sizeProp ?? g?.size
+    const baseRefraction = refractionProp ?? g?.refraction ?? DEFAULT_GLASS_CONFIG.refraction
+    const depth = depthProp ?? g?.depth ?? DEFAULT_GLASS_CONFIG.depth
+    const baseDispersion = dispersionProp ?? g?.dispersion ?? DEFAULT_GLASS_CONFIG.dispersion
+    const frost = frostProp ?? g?.frost ?? DEFAULT_GLASS_CONFIG.frost
+    const splay = splayProp ?? g?.splay ?? DEFAULT_GLASS_CONFIG.splay
+    const lightMode = lightModeProp ?? g?.lightMode ?? DEFAULT_GLASS_CONFIG.lightMode
+    const lightAngle = lightAngleProp ?? g?.lightAngle ?? DEFAULT_GLASS_CONFIG.lightAngle
+    const lightIntensity = lightIntensityProp ?? g?.lightIntensity ?? DEFAULT_GLASS_CONFIG.lightIntensity
+    const glow = glowProp ?? g?.glow ?? DEFAULT_GLASS_CONFIG.glow
+    const borderRadiusProp = borderRadiusPropProp ?? g?.borderRadius
+    const tint = tintProp ?? g?.tint
+    const fill = fillProp ?? g?.fill
+    const fillOverlay = fillOverlayProp ?? g?.fillOverlay
+    const shadow = shadowProp ?? g?.shadow
+
+    const motionScale = reducedMotion ? REDUCED_MOTION_DISPLACEMENT_SCALE : 1
+    const refraction = baseRefraction * motionScale
+    const dispersion = baseDispersion * motionScale
 
     const rootRef = useRef<HTMLDivElement | null>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
-    const fieldRef = useRef<BevelField | null>(null)
-    const outImageRef = useRef<ImageData | null>(null)
-    const parentTintRef = useRef('')
-    const isVisibleRef = useRef(true)
-    const lastDrawRef = useRef<LastDrawState | null>(null)
-    const reducedMotionRef = useRef(prefersReducedMotion)
-    reducedMotionRef.current = prefersReducedMotion
-
-    const opticsRef = useRef({ refraction, dispersion, frost })
-    opticsRef.current = { refraction, dispersion, frost }
-
-    const onMapUpdateRef = useRef(onMapUpdate)
-    onMapUpdateRef.current = onMapUpdate
+    const rtRef = useRef<RuntimeState | null>(null)
+    const rt = (rtRef.current ??= {
+      field: null,
+      outImg: null,
+      tint: '',
+      visible: true,
+      last: null,
+      reduced: false,
+      refraction: 0,
+      dispersion: 0,
+      frost: 0,
+      onMapUpdate: undefined,
+    })
+    rt.reduced = reducedMotion
+    rt.refraction = refraction
+    rt.dispersion = dispersion
+    rt.frost = frost
+    rt.onMapUpdate = onMapUpdate
 
     const setRootRef = useCallback(
       (node: HTMLDivElement | null) => {
         rootRef.current = node
-        assignRef(forwardedRef, node)
+        if (typeof forwardedRef === 'function') forwardedRef(node)
+        else if (forwardedRef) (forwardedRef as MutableRefObject<HTMLDivElement | null>).current = node
       },
       [forwardedRef],
     )
 
-    const [metrics, setMetrics] = useState<BoxMetrics>({ width: 0, height: 0, borderRadius: 0 })
+    const [metrics, setMetrics] = useState({ width: 0, height: 0, borderRadius: 0 })
     const [targetEl, setTargetEl] = useState<HTMLElement | null>(null)
-
     const hasChildren = children !== undefined && children !== null
     const isStandalone = mode === 'wrapper' && !hasChildren
     const explicitSize = mode === 'wrapper' ? size : undefined
 
-    // RefObject identity never changes when .current mounts after child layout effects in React 19,
-    // so sync both on layout and commit without a dependency array.
-    useIsomorphicLayoutEffect(() => {
+    // RefObject identity is stable when .current mounts after child layout effects; sync on both phases.
+    const syncTarget = () => {
       const resolved = resolveTarget(refractionTarget)
       setTargetEl((prev) => (prev === resolved ? prev : resolved))
-    })
-
-    useEffect(() => {
-      const resolved = resolveTarget(refractionTarget)
-      setTargetEl((prev) => (prev === resolved ? prev : resolved))
-    })
+    }
+    useIsomorphicLayoutEffect(syncTarget)
+    useEffect(syncTarget)
 
     useIsomorphicLayoutEffect(() => {
       const el = rootRef.current
       if (!el) return
-
       const update = () => {
         const next = measureElementBox(el, borderRadiusProp)
-        setMetrics((prev) =>
-          prev.width === next.width && prev.height === next.height && prev.borderRadius === next.borderRadius
-            ? prev
-            : next,
+        setMetrics((p) =>
+          p.width === next.width && p.height === next.height && p.borderRadius === next.borderRadius ? p : next,
         )
       }
-
       update()
-      const unsubEl = observeGlassResize(el, update)
-      const unsubParent = el.parentElement ? observeGlassResize(el.parentElement, update) : undefined
+      const unsubEl = observeResize(el, update)
+      const unsubParent = el.parentElement ? observeResize(el.parentElement, update) : undefined
       return () => {
         unsubEl()
         unsubParent?.()
@@ -354,19 +361,23 @@ export const LiquidGlass = memo(
     }, [mode, explicitSize, isStandalone, className, style?.borderRadius, borderRadiusProp])
 
     const drawFrame = useCallback(() => {
-      if (!isVisibleRef.current) return
+      if (!rt.visible) return
       const canvas = canvasRef.current
       const root = rootRef.current
-      const field = fieldRef.current
-      if (!canvas || !root || !field || !targetEl || !isElementVisibleForDraw(root)) return
+      const field = rt.field
+      if (!canvas || !root || !field || !targetEl) return
+      const visCheck = (root as HTMLElement & { checkVisibility?: (o: object) => boolean }).checkVisibility
+      if (typeof visCheck === 'function' && !visCheck.call(root, { checkOpacity: true, checkVisibilityCSS: true })) {
+        return
+      }
 
       const rootRect = root.getBoundingClientRect()
       if (
         typeof window !== 'undefined' &&
         window.innerHeight > 0 &&
-        (rootRect.bottom < -OFFSCREEN_MARGIN_PX || rootRect.top > window.innerHeight + OFFSCREEN_MARGIN_PX)
+        (rootRect.bottom < -200 || rootRect.top > window.innerHeight + 200)
       ) {
-        isVisibleRef.current = false
+        rt.visible = false
         setOffscreenAttr(root, true)
         return
       }
@@ -375,16 +386,17 @@ export const LiquidGlass = memo(
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      const { refraction: curRefraction, dispersion: curDispersion, frost: curFrost } = opticsRef.current
+      const { refraction: curRef, dispersion: curDisp, frost: curFrost, tint: curTint } = rt
       const webgl = isWebGLRefractionAvailable()
       const snapshot = getTargetSnapshot(targetEl, root)
-      const hasEffect = curRefraction > REFRACTION_MIN_THRESHOLD || (webgl && curFrost > FROST_MIN_THRESHOLD)
-
-      if (!snapshot || !hasEffect) {
+      const syncSize = () => {
         if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
         if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
+      }
+      if (!snapshot || (curRef <= 0.01 && !(webgl && curFrost > 0.05))) {
+        syncSize()
         ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
-        lastDrawRef.current = null
+        rt.last = null
         notifyGlassRedrawn(targetEl, root)
         return
       }
@@ -393,73 +405,51 @@ export const LiquidGlass = memo(
       const offsetX = rootRect.left - targetRect.left
       const offsetY = rootRect.top - targetRect.top
       const effectiveFrost = webgl ? curFrost : 0
-
-      const prev = lastDrawRef.current
+      const prev = rt.last
       if (
         prev &&
         prev.version === snapshot.version &&
-        Math.abs(prev.offsetX - offsetX) < OFFSET_EPSILON_PX &&
-        Math.abs(prev.offsetY - offsetY) < OFFSET_EPSILON_PX &&
-        prev.refraction === curRefraction &&
-        prev.dispersion === curDispersion &&
+        Math.abs(prev.offsetX - offsetX) < 0.25 &&
+        Math.abs(prev.offsetY - offsetY) < 0.25 &&
+        prev.refraction === curRef &&
+        prev.dispersion === curDisp &&
         prev.frost === effectiveFrost &&
-        prev.tint === parentTintRef.current &&
+        prev.tint === curTint &&
         prev.fieldHash === field.hash
       ) {
         return
       }
 
-      if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
-      if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
-
-      if (
-        !webgl &&
-        (!outImageRef.current ||
-          outImageRef.current.width !== field.bufWidth ||
-          outImageRef.current.height !== field.bufHeight)
-      ) {
-        outImageRef.current = ctx.createImageData(field.bufWidth, field.bufHeight)
+      syncSize()
+      if (!webgl && (!rt.outImg || rt.outImg.width !== field.bufWidth || rt.outImg.height !== field.bufHeight)) {
+        rt.outImg = ctx.createImageData(field.bufWidth, field.bufHeight)
       }
 
-      renderRefractedBevel(
-        ctx,
-        outImageRef.current,
-        field,
-        snapshot,
-        offsetX,
-        offsetY,
-        curRefraction,
-        curDispersion,
-        parentTintRef.current,
-        curFrost,
-      )
-      lastDrawRef.current = {
+      renderRefractedBevel(ctx, rt.outImg, field, snapshot, offsetX, offsetY, curRef, curDisp, curTint, curFrost)
+      rt.last = {
         version: snapshot.version,
         offsetX,
         offsetY,
-        refraction: curRefraction,
-        dispersion: curDispersion,
+        refraction: curRef,
+        dispersion: curDisp,
         frost: effectiveFrost,
-        tint: parentTintRef.current,
+        tint: curTint,
         fieldHash: field.hash,
       }
       notifyGlassRedrawn(targetEl, root)
-    }, [targetEl])
+    }, [targetEl, rt])
 
     useIsomorphicLayoutEffect(() => {
       const { width, height, borderRadius } = metrics
       if (width < 2 || height < 2) {
-        fieldRef.current = null
-        outImageRef.current = null
+        rt.field = rt.outImg = null
         return
       }
-
       if (!targetEl) {
-        fieldRef.current = null
-        outImageRef.current = null
+        rt.field = rt.outImg = null
         emitMapUpdate(
-          onMapUpdateRef.current,
-          opticsRef.current.refraction > REFRACTION_MIN_THRESHOLD ? 'css-optics' : null,
+          rt.onMapUpdate,
+          rt.refraction > 0.01 ? 'css-optics' : null,
           { width, height, borderRadius, depth, splay },
           'no-target',
         )
@@ -469,17 +459,13 @@ export const LiquidGlass = memo(
       const scale = chooseRenderScale(width, height, depth)
       const { field, dataUrl } = acquireBevelField(
         { width, height, borderRadius, depth, splay, scale },
-        Boolean(onMapUpdateRef.current),
+        Boolean(rt.onMapUpdate),
       )
-
-      fieldRef.current = field
-      if (rootRef.current) {
-        scheduleGlassDraw(rootRef.current, drawFrame)
-      }
-
+      rt.field = field
+      if (rootRef.current) scheduleDraw(rootRef.current, drawFrame)
       emitMapUpdate(
-        onMapUpdateRef.current,
-        opticsRef.current.refraction > REFRACTION_MIN_THRESHOLD && depth > 0.5 ? field.fieldId : null,
+        rt.onMapUpdate,
+        rt.refraction > 0.01 && depth > 0.5 ? field.fieldId : null,
         { width, height, borderRadius, depth, splay },
         field.hash,
         dataUrl,
@@ -487,29 +473,19 @@ export const LiquidGlass = memo(
 
       return () => {
         releaseBevelField(field.hash)
-        if (fieldRef.current === field) {
-          fieldRef.current = null
-        }
-        outImageRef.current = null
+        if (rt.field === field) rt.field = null
+        rt.outImg = null
       }
-    }, [targetEl, metrics, depth, splay, drawFrame])
+    }, [targetEl, metrics, depth, splay, drawFrame, rt])
 
     useIsomorphicLayoutEffect(() => {
-      if (rootRef.current) {
-        scheduleGlassDraw(rootRef.current, drawFrame)
-      }
-      const field = fieldRef.current
+      if (rootRef.current) scheduleDraw(rootRef.current, drawFrame)
+      const field = rt.field
       if (!field || !targetEl) return
       emitMapUpdate(
-        onMapUpdateRef.current,
-        refraction > REFRACTION_MIN_THRESHOLD && depth > 0.5 ? field.fieldId : null,
-        {
-          width: field.width,
-          height: field.height,
-          borderRadius: field.borderRadius,
-          depth,
-          splay,
-        },
+        rt.onMapUpdate,
+        refraction > 0.01 && depth > 0.5 ? field.fieldId : null,
+        { width: field.width, height: field.height, borderRadius: field.borderRadius, depth, splay },
         field.hash,
       )
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -518,149 +494,156 @@ export const LiquidGlass = memo(
     useIsomorphicLayoutEffect(() => {
       const root = rootRef.current
       if (!root) return
-
       if (!targetEl) {
-        return observeGlassIntersection(root, (isIntersecting) => {
-          isVisibleRef.current = isIntersecting
-          setOffscreenAttr(root, !isIntersecting)
+        return observeIntersection(root, (vis) => {
+          rt.visible = vis
+          setOffscreenAttr(root, !vis)
         })
       }
 
       let animRaf = 0
       let animDeadline = 0
-
       const syncTint = () => {
-        parentTintRef.current = resolveSurfaceTint(root, mode, tint)
+        rt.tint = resolveSurfaceTint(root, mode, tint)
       }
-
-      const stopAnimLoop = () => {
+      const stopAnim = () => {
         if (animRaf) {
           cancelAnimationFrame(animRaf)
           animRaf = 0
         }
       }
-
       const tickAnim = () => {
         animRaf = 0
         syncTint()
         drawFrame()
-        if (nowMs() < animDeadline) {
-          animRaf = requestAnimationFrame(tickAnim)
-        }
+        if (nowMs() < animDeadline) animRaf = requestAnimationFrame(tickAnim)
       }
-
-      const startAnimLoop = () => {
-        if (reducedMotionRef.current) {
+      const startAnim = () => {
+        if (rt.reduced) {
           syncTint()
-          scheduleGlassDraw(root, drawFrame)
+          scheduleDraw(root, drawFrame)
           return
         }
-        animDeadline = nowMs() + TRANSITION_LOOP_DURATION_MS
+        animDeadline = nowMs() + 450
         if (!animRaf) animRaf = requestAnimationFrame(tickAnim)
       }
-
-      const onTransitionFinish = () => {
-        stopAnimLoop()
+      const finishAnim = () => {
+        stopAnim()
         syncTint()
-        scheduleGlassDraw(root, drawFrame)
+        scheduleDraw(root, drawFrame)
+      }
+      const reqDraw = () => {
+        if (rt.visible) scheduleDraw(root, drawFrame)
       }
 
-      const scheduleDraw = () => {
-        if (!isVisibleRef.current) return
-        scheduleGlassDraw(root, drawFrame)
-      }
-
-      const unsubSnapshot = subscribeTargetSnapshot(targetEl, scheduleDraw, root)
+      const unsubSnap = subscribeTargetSnapshot(targetEl, reqDraw, root)
       syncTint()
-      scheduleGlassDraw(root, drawFrame)
+      scheduleDraw(root, drawFrame)
 
-      const unsubIo = observeGlassIntersection(root, (isIntersecting) => {
-        const wasVisible = isVisibleRef.current
-        isVisibleRef.current = isIntersecting
-        setOffscreenAttr(root, !isIntersecting)
-        if (isIntersecting && !wasVisible) {
+      const unsubIo = observeIntersection(root, (vis) => {
+        const was = rt.visible
+        rt.visible = vis
+        setOffscreenAttr(root, !vis)
+        if (vis && !was) {
           syncTint()
-          scheduleGlassDraw(root, drawFrame)
+          scheduleDraw(root, drawFrame)
         }
       })
 
-      const needsScrollSync = needsScrollSynchronization(targetEl, root)
-      const unsubRo = observeGlassResize(root, scheduleDraw)
+      const scrollSync = needsScrollSync(targetEl, root)
+      const unsubRo = observeResize(root, reqDraw)
+      const parentEl = root.parentElement
 
-      // Synchronous draw inside mutation microtask prevents trailing during transform drags.
-      const ancestorMo = new MutationObserver(() => {
-        if (tint === undefined && mode === 'layer') {
-          syncTint()
-        }
+      // Draw synchronously inside mutation microtask to avoid trailing during CSS transform drags.
+      const mo = new MutationObserver(() => {
+        if (tint === undefined && mode === 'layer') syncTint()
         drawFrame()
       })
-
-      const parentEl = root.parentElement
-      ancestorMo.observe(root, { attributes: true, attributeFilter: ['style', 'class'] })
+      mo.observe(root, { attributes: true, attributeFilter: ['style', 'class'] })
       if (parentEl && parentEl !== targetEl && parentEl !== document.documentElement) {
-        ancestorMo.observe(parentEl, { attributes: true, attributeFilter: ['style', 'class'] })
+        mo.observe(parentEl, { attributes: true, attributeFilter: ['style', 'class'] })
       }
 
-      const transitionTargets = [root, parentEl].filter((el): el is HTMLElement => Boolean(el))
-      for (const el of transitionTargets) {
-        el.addEventListener('transitionrun', startAnimLoop)
-        el.addEventListener('transitionend', onTransitionFinish)
-        el.addEventListener('transitioncancel', onTransitionFinish)
+      const animTargets = parentEl ? [root, parentEl] : [root]
+      for (const el of animTargets) {
+        el.addEventListener('transitionrun', startAnim)
+        el.addEventListener('transitionend', finishAnim)
+        el.addEventListener('transitioncancel', finishAnim)
       }
-      if (needsScrollSync) {
-        window.addEventListener('scroll', scheduleDraw, { passive: true, capture: true })
-      }
-      window.addEventListener('resize', scheduleDraw, { passive: true })
+      if (scrollSync) window.addEventListener('scroll', reqDraw, { passive: true, capture: true })
+      window.addEventListener('resize', reqDraw, { passive: true })
 
       return () => {
-        cancelGlassDraw(root)
-        stopAnimLoop()
-        unsubSnapshot()
+        cancelDraw(root)
+        stopAnim()
+        unsubSnap()
         unsubIo()
         unsubRo()
-        ancestorMo.disconnect()
-        for (const el of transitionTargets) {
-          el.removeEventListener('transitionrun', startAnimLoop)
-          el.removeEventListener('transitionend', onTransitionFinish)
-          el.removeEventListener('transitioncancel', onTransitionFinish)
+        mo.disconnect()
+        for (const el of animTargets) {
+          el.removeEventListener('transitionrun', startAnim)
+          el.removeEventListener('transitionend', finishAnim)
+          el.removeEventListener('transitioncancel', finishAnim)
         }
-        if (needsScrollSync) {
-          window.removeEventListener('scroll', scheduleDraw, true)
-        }
-        window.removeEventListener('resize', scheduleDraw)
+        if (scrollSync) window.removeEventListener('scroll', reqDraw, true)
+        window.removeEventListener('resize', reqDraw)
       }
     }, [targetEl, mode, tint, drawFrame])
 
-    const rootStyle = useMemo(
-      () =>
-        buildRootStyle(
-          frost,
-          lightAngle,
-          lightIntensity,
-          glow,
-          explicitSize,
-          borderRadiusProp,
-          tint,
-          style,
-        ),
-      [frost, lightAngle, lightIntensity, glow, explicitSize, borderRadiusProp, tint, style],
-    )
+    const [rootStyle, fillLayerStyle] = useMemo(() => {
+      // Subtract 90deg so lightAngle=0 points down from top edge in CSS clockwise coordinates.
+      const rad = degToRad(lightAngle - 90)
+      const frostAmt = clamp(frost, 0, 100)
+      const s: Record<string, string | number> = {}
+      if (explicitSize !== undefined) {
+        s.width = s.height = explicitSize
+        s.borderRadius = '50%'
+      }
+      if (borderRadiusProp !== undefined) s.borderRadius = borderRadiusProp as string | number
+      if (tint !== undefined) s.backgroundColor = tint
+      if (style) Object.assign(s, style)
+      s['--lg-frost-blur'] = `${(frostAmt * 0.2).toFixed(2)}px`
+      s['--lg-frost-sat'] = `${(100 + frostAmt * 0.8).toFixed(1)}%`
+      s['--lg-light-angle'] = `${lightAngle}deg`
+      s['--lg-light'] = (clamp(lightIntensity, 0, 100) / 50).toFixed(3)
+      s['--lg-glow'] = (clamp(glow, 0, 100) / 100).toFixed(3)
+      s['--lg-lx'] = Math.cos(rad).toFixed(4)
+      s['--lg-ly'] = Math.sin(rad).toFixed(4)
 
-    const fillLayerStyle = useMemo(
-      () => resolveFillLayerStyle(fill, fillOverlay, shadow),
-      [fill, fillOverlay, shadow],
-    )
+      const hasFill = fill !== undefined && fill !== false
+      const baseFill = fill === true ? OPTICAL_MATERIAL_DEFAULTS.fill : typeof fill === 'string' ? fill : undefined
+      const overlay =
+        fillOverlay === 'none' || fillOverlay === 'transparent'
+          ? undefined
+          : (fillOverlay ?? (hasFill ? OPTICAL_MATERIAL_DEFAULTS.fillOverlay : undefined))
+      const resShadow =
+        shadow === false || shadow === 'none'
+          ? undefined
+          : typeof shadow === 'string'
+            ? shadow
+            : shadow === true || hasFill
+              ? OPTICAL_MATERIAL_DEFAULTS.shadow
+              : undefined
+
+      let fs: CSSProperties | null = null
+      if (baseFill || overlay || resShadow) {
+        fs = {}
+        if (baseFill) fs.backgroundColor = baseFill
+        if (overlay) fs.backgroundImage = `linear-gradient(${overlay}, ${overlay})`
+        if (resShadow) fs.boxShadow = resShadow
+      }
+      return [s as CSSProperties, fs]
+    }, [frost, lightAngle, lightIntensity, glow, explicitSize, borderRadiusProp, tint, style, fill, fillOverlay, shadow])
 
     const isLayer = mode === 'layer'
     const rootClassName = [
       'lg-root',
       isLayer ? 'lg-root--layer' : 'lg-root--wrapper',
-      isStandalone ? 'lg-root--standalone' : '',
+      isStandalone && 'lg-root--standalone',
       className,
     ]
       .filter(Boolean)
       .join(' ')
-
     const useWebGLFrost = Boolean(targetEl) && isWebGLRefractionAvailable()
 
     return (
@@ -679,13 +662,10 @@ export const LiquidGlass = memo(
             <canvas ref={canvasRef} className="lg-refract-canvas" />
           </div>
         )}
-
-        {!useWebGLFrost && frost > FROST_MIN_THRESHOLD && <div className="lg-frost" aria-hidden="true" />}
+        {!useWebGLFrost && frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
         {fillLayerStyle && <div className="lg-fill" style={fillLayerStyle} aria-hidden="true" />}
-
-        {glow > GLOW_MIN_THRESHOLD && <div className="lg-glow" aria-hidden="true" />}
-        {lightIntensity > LIGHT_INTENSITY_MIN_THRESHOLD && <div className="lg-rim" aria-hidden="true" />}
-
+        {glow > 0.05 && <div className="lg-glow" aria-hidden="true" />}
+        {lightIntensity > 0.05 && <div className="lg-rim" aria-hidden="true" />}
         {hasChildren && <div className="lg-content">{children}</div>}
       </div>
     )

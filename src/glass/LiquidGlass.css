@@ -1,7 +1,5 @@
 .lg-root {
   box-sizing: border-box;
-  /* Outer hairline contour, subtle elevation, and inner bevel depth keep glass legible
-     across light and white surfaces. */
   box-shadow:
     0 0 0 0.5px rgb(0 0 0 / 0.18),
     0 4px 16px -4px rgb(0 0 0 / 0.08),
@@ -15,7 +13,6 @@
   --lg-lx: 0;
   --lg-ly: -1;
 }
-
 .lg-root--layer {
   position: absolute;
   inset: 0;
@@ -24,18 +21,15 @@
   z-index: 0;
   contain: layout style;
 }
-
 .lg-root--wrapper {
   position: relative;
   display: block;
 }
-
 :where(.lg-root--standalone) {
   width: 166px;
   height: 166px;
   border-radius: 50%;
 }
-
 .lg-refract-clip,
 .lg-refract-canvas,
 .lg-fill,
@@ -46,43 +40,25 @@
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-}
-
-.lg-fill {
   z-index: 0;
 }
-
-/* Rounded corner clip for the refracted bevel <canvas> */
 .lg-refract-clip {
-  z-index: 0;
   overflow: hidden;
 }
-
 .lg-refract-canvas {
   width: 100%;
   height: 100%;
   display: block;
 }
-
-/*
- * Frost: stage 2 of the pipeline. The canvas above has already refracted and dispersed the rim;
- * backdrop-filter then diffuses the composite (refracted bevel + live center) so bent edge
- * reflections read velvety instead of pixelated. Subtle saturation boost mimics glass scatter.
- */
 .lg-frost {
-  z-index: 0;
   -webkit-backdrop-filter: blur(var(--lg-frost-blur)) saturate(var(--lg-frost-sat));
   backdrop-filter: blur(var(--lg-frost-blur)) saturate(var(--lg-frost-sat));
 }
-
 .lg-root[data-lg-offscreen='1'] .lg-frost {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-
-/* Natural white inner glow & directional volumetric specular bloom */
 .lg-glow {
-  z-index: 0;
   background:
     radial-gradient(
       85% 85% at calc(50% + var(--lg-lx) * 40%) calc(50% + var(--lg-ly) * 40%),
@@ -96,19 +72,13 @@
       rgb(255 255 255 / 0) 70%
     );
 }
-
-/*
- * Directional specular rim rendered via zero-blur inset box-shadows so no offscreen
- * mask-composite surface is allocated per element.
- */
+/* Zero-blur inset shadows avoid per-element mask-composite compositor surfaces. */
 .lg-rim {
-  z-index: 0;
   box-shadow:
     inset calc(var(--lg-lx) * -1.35px) calc(var(--lg-ly) * -1.35px) 0 0 rgb(255 255 255 / calc(0.75 * var(--lg-light))),
     inset calc(var(--lg-lx) * 1.1px) calc(var(--lg-ly) * 1.1px) 0 0 rgb(255 255 255 / calc(0.32 * var(--lg-light))),
     inset 0 0 0 1px rgb(255 255 255 / calc(0.08 * var(--lg-light)));
 }
-
 .lg-content {
   position: relative;
   z-index: 1;
@@ -116,15 +86,12 @@
   height: 100%;
   border-radius: inherit;
 }
-
-/* Default natural lighting: symmetric top & bottom specular border glow */
 .lg-root[data-lg-light-mode='natural'] .lg-rim {
   box-shadow:
     inset 0 1.25px 0 0 rgb(255 255 255 / calc(0.72 * var(--lg-light))),
     inset 0 -1.25px 0 0 rgb(255 255 255 / calc(0.68 * var(--lg-light))),
     inset 0 0 0 1px rgb(255 255 255 / calc(0.06 * var(--lg-light)));
 }
-
 .lg-root[data-lg-light-mode='natural'] .lg-glow {
   background: linear-gradient(
     180deg,
@@ -136,7 +103,6 @@
     rgb(255 255 255 / calc(0.36 * var(--lg-glow))) 100%
   );
 }
-
 @media (prefers-reduced-motion: reduce) {
   .lg-root,
   .lg-root * {
