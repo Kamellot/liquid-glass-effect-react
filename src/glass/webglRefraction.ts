@@ -105,16 +105,20 @@ void main() {
     return;
   }
 
+  float outerAlpha = sd <= 0.0 ? 1.0 : 1.0 - sd / 0.75;
   float distInward = sd < 0.0 ? -sd : 0.0;
   if (distInward >= u_effectiveDepth) {
-    gl_FragColor = vec4(0.0);
+    vec4 s = sampleSnap(fragCss);
+    vec3 rgb = s.rgb;
+    if (u_tint.a > 0.001) {
+      rgb = mix(rgb, u_tint.rgb, u_tint.a);
+    }
+    gl_FragColor = vec4(rgb, outerAlpha * s.a);
     return;
   }
 
-  float outerAlpha = sd <= 0.0 ? 1.0 : 1.0 - sd / 0.75;
   float u = clamp(1.0 - distInward / u_effectiveDepth, 0.0, 1.0);
-  float innerAlpha = smoothstep(0.0, 0.08, u);
-  float bevelAlpha = outerAlpha * innerAlpha;
+  float bevelAlpha = outerAlpha;
   if (bevelAlpha <= 0.002) {
     gl_FragColor = vec4(0.0);
     return;

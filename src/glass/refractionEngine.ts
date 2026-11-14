@@ -173,6 +173,9 @@ export function buildBevelHash(spec: BevelSpec): string {
 
 export function chooseRenderScale(width: number, height: number, depth: number): number {
   const maxDpr = typeof window !== 'undefined' ? clamp(window.devicePixelRatio || 1, 1, 2) : 1
+  if (isWebGLRefractionAvailable()) {
+    return Math.round(maxDpr * 4) / 4
+  }
   const effectiveDepth = clamp(depth, 0, Math.min(width, height) * 0.5)
   const approxBevelPx = Math.min(width * height, 2 * (width + height) * effectiveDepth)
   const bounded = Math.sqrt(MAX_BEVEL_BUDGET / Math.max(1, approxBevelPx))
@@ -190,11 +193,6 @@ interface BevelCurveParams {
   splayExp: number
   cornerExponent: number
   maxRadialSlope: number
-}
-
-function smooth01(v: number): number {
-  const t = clamp01(v)
-  return t * t * (3 - 2 * t)
 }
 
 /**
@@ -258,7 +256,7 @@ function evalTopLeftBevel(cx: number, cy: number, p: BevelCurveParams): BevelSam
 
   const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
   const u = clamp01(1 - distInward / p.effectiveDepth)
-  const innerAlpha = smooth01(u / 0.08)
+  const innerAlpha = 1
   const mag = evalBevelMagnitude(u, p.splayExp) * outerAlpha
 
   let ux = 0
@@ -687,7 +685,35 @@ export function renderRefractedBevel(
     }
   }
 
-  ctx.putImageData(imgData, 0, 0)
+  const surface = getCanvasContext(field.bufWidth, field.bufHeight)
+  if (surface) {
+    surface.ctx.putImageData(imgData, 0, 0)
+    ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+    const sx = offsetX * srcScale
+    const sy = offsetY * srcScale
+    const sw = field.width * srcScale
+    const sh = field.height * srcScale
+    if (sx >= 0 && sy >= 0 && sx + sw <= snapshot.width && sy + sh <= snapshot.height) {
+      ctx.drawImage(snapshot.canvas, sx, sy, sw, sh, 0, 0, field.bufWidth, field.bufHeight)
+    } else {
+      const csx = clamp(sx, 0, snapshot.width)
+      const csy = clamp(sy, 0, snapshot.height)
+      const cex = clamp(sx + sw, 0, snapshot.width)
+      const cey = clamp(sy + sh, 0, snapshot.height)
+      const csw = cex - csx
+      const csh = cey - csy
+      if (csw > 0 && csh > 0) {
+        const dx = ((csx - sx) / sw) * field.bufWidth
+        const dy = ((csy - sy) / sh) * field.bufHeight
+        const dw = (csw / sw) * field.bufWidth
+        const dh = (csh / sh) * field.bufHeight
+        ctx.drawImage(snapshot.canvas, csx, csy, csw, csh, dx, dy, dw, dh)
+      }
+    }
+    ctx.drawImage(surface.canvas, 0, 0)
+  } else {
+    ctx.putImageData(imgData, 0, 0)
+  }
   if (tintColor) {
     ctx.save()
     ctx.globalCompositeOperation = 'source-atop'
