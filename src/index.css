@@ -4,7 +4,7 @@
   --muted: #8b8d98;
   --accent: #8f8bf7;
   --line: rgb(255 255 255 / 0.08);
-  color-scheme: dark;
+  color-scheme: only dark;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
