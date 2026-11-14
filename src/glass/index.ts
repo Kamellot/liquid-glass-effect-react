@@ -1,6 +1,9 @@
 export { LiquidGlass } from './LiquidGlass'
 export {
+  configureLiquidGlass,
+  getLiquidGlassConfig,
   LiquidGlassProvider,
+  resetLiquidGlassConfig,
   useLiquidGlassConfig,
   type LiquidGlassProviderProps,
 } from './LiquidGlassContext'

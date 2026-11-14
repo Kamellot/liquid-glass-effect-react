@@ -2,7 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { DEFAULTS, LiquidGlass, LiquidGlassProvider } from '../src/glass'
+import {
+  configureLiquidGlass,
+  DEFAULTS,
+  LiquidGlass,
+  LiquidGlassProvider,
+  resetLiquidGlassConfig,
+} from '../src/glass'
 
 test('LiquidGlass works standalone without LiquidGlassProvider (opt-in)', () => {
   const html = renderToStaticMarkup(createElement(LiquidGlass))
@@ -130,4 +136,39 @@ test('Nested LiquidGlassProvider merges with parent by default and supports inhe
   assert.match(isolatedHtml, /data-lg-light-mode="custom"/)
   assert.match(isolatedHtml, new RegExp(`--lg-glow:${(DEFAULTS.glow / 100).toFixed(3)}`))
   assert.doesNotMatch(isolatedHtml, /background-color:/)
+})
+
+test('configureLiquidGlass applies global defaults without any provider wrapper and supports overrides + ignoreGlobal', () => {
+  try {
+    configureLiquidGlass({
+      lightMode: 'custom',
+      lightAngle: 90,
+      glow: 72,
+      frost: 25,
+      tint: 'rgba(12, 34, 56, 0.5)',
+    })
+
+    const globalHtml = renderToStaticMarkup(createElement(LiquidGlass))
+    assert.match(globalHtml, /data-lg-light-mode="custom"/)
+    assert.match(globalHtml, /--lg-light-angle:90deg/)
+    assert.match(globalHtml, /--lg-glow:0\.720/)
+    assert.match(globalHtml, /--lg-frost-blur:5\.00px/)
+    assert.match(globalHtml, /background-color:rgba\(12, 34, 56, 0\.5\)/)
+
+    const overrideHtml = renderToStaticMarkup(
+      createElement(LiquidGlass, { lightMode: 'natural', glow: 12 }),
+    )
+    assert.match(overrideHtml, /data-lg-light-mode="natural"/)
+    assert.match(overrideHtml, /--lg-glow:0\.120/)
+    assert.match(overrideHtml, /--lg-frost-blur:5\.00px/)
+
+    const ignoredHtml = renderToStaticMarkup(
+      createElement(LiquidGlass, { ignoreGlobal: true }),
+    )
+    assert.match(ignoredHtml, /data-lg-light-mode="natural"/)
+    assert.match(ignoredHtml, new RegExp(`--lg-glow:${(DEFAULTS.glow / 100).toFixed(3)}`))
+    assert.doesNotMatch(ignoredHtml, /background-color:/)
+  } finally {
+    resetLiquidGlassConfig()
+  }
 })
