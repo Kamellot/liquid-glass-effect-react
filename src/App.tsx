@@ -3,6 +3,7 @@ import { getEngineStats, subscribeEngineStats, type EngineStats } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
+import { PerfObserverHud } from './demo/PerfObserverHud'
 import { VideoScene } from './demo/VideoScene'
 import { DEFAULT_PARAMS, type DemoParams } from './demo/presets'
 
@@ -62,6 +63,8 @@ export default function App() {
         open={panelOpen}
         onToggle={() => setPanelOpen((o) => !o)}
       />
+
+      <PerfObserverHud />
     </>
   )
 }
