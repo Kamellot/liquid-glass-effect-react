@@ -71,6 +71,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   splay = DEFAULTS.splay,
   lightAngle = DEFAULTS.lightAngle,
   lightIntensity = DEFAULTS.lightIntensity,
+  glow = DEFAULTS.glow,
   borderRadius: borderRadiusProp,
   tint,
   fill,
@@ -466,12 +467,14 @@ export const LiquidGlass = memo(function LiquidGlass({
     const ly = Math.sin(rad)
     const frostAmt = Math.max(0, Math.min(100, frost))
     const light = Math.max(0, Math.min(100, lightIntensity)) / 50
+    const glowAmt = Math.max(0, Math.min(100, glow)) / 100
 
     const vars: Record<string, string | number> = {
       '--lg-frost-blur': `${(frostAmt * 0.2).toFixed(2)}px`,
       '--lg-frost-sat': `${(100 + frostAmt * 0.8).toFixed(1)}%`,
       '--lg-light-angle': `${lightAngle}deg`,
       '--lg-light': light.toFixed(3),
+      '--lg-glow': glowAmt.toFixed(3),
       '--lg-lx': lx.toFixed(4),
       '--lg-ly': ly.toFixed(4),
     }
@@ -495,7 +498,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       ...style,
       ...vars,
     } as CSSProperties
-  }, [frost, lightAngle, lightIntensity, explicitSize, borderRadiusProp, tint, style])
+  }, [frost, lightAngle, lightIntensity, glow, explicitSize, borderRadiusProp, tint, style])
 
   const fillLayerStyle = useMemo<CSSProperties | null>(() => {
     const hasFill = fill !== undefined && fill !== false

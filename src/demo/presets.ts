@@ -9,6 +9,7 @@ export interface DemoParams {
   splay: number
   lightAngle: number
   lightIntensity: number
+  glow: number
 }
 
 export const DEFAULT_PARAMS: DemoParams = {
@@ -35,6 +36,7 @@ export const SLIDERS: SliderDef[] = [
   { key: 'splay', label: 'Splay', min: 0, max: 100, step: 1, decimals: 0 },
   { key: 'lightAngle', label: 'Light Angle', min: 0, max: 360, step: 1, decimals: 0 },
   { key: 'lightIntensity', label: 'Light Intensity', min: 0, max: 100, step: 1, decimals: 0 },
+  { key: 'glow', label: 'Glow', min: 0, max: 100, step: 1, decimals: 0 },
 ]
 
 export interface Preset {
@@ -46,18 +48,18 @@ export const PRESETS: Preset[] = [
   { name: 'Default', params: DEFAULT_PARAMS },
   {
     name: 'Pure Water Lens',
-    params: { size: 220, refraction: 55, depth: 30, dispersion: 0, frost: 0, splay: 40, lightAngle: 0, lightIntensity: 25 },
+    params: { size: 220, refraction: 55, depth: 30, dispersion: 0, frost: 0, splay: 40, lightAngle: 0, lightIntensity: 25, glow: 20 },
   },
   {
     name: 'Apple iOS Dock',
-    params: { size: 166, refraction: 45, depth: 14, dispersion: 10, frost: 14, splay: 30, lightAngle: 0, lightIntensity: 50 },
+    params: { size: 166, refraction: 45, depth: 14, dispersion: 10, frost: 14, splay: 30, lightAngle: 0, lightIntensity: 50, glow: 35 },
   },
   {
     name: 'Chromatic Prism',
-    params: { size: 200, refraction: 90, depth: 34, dispersion: 80, frost: 0, splay: 10, lightAngle: 135, lightIntensity: 60 },
+    params: { size: 200, refraction: 90, depth: 34, dispersion: 80, frost: 0, splay: 10, lightAngle: 135, lightIntensity: 60, glow: 65 },
   },
   {
     name: 'Frosted Pebble',
-    params: { size: 190, refraction: 35, depth: 40, dispersion: 10, frost: 55, splay: 60, lightAngle: 250, lightIntensity: 40 },
+    params: { size: 190, refraction: 35, depth: 40, dispersion: 10, frost: 55, splay: 60, lightAngle: 250, lightIntensity: 40, glow: 45 },
   },
 ]

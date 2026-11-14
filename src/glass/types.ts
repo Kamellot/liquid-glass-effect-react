@@ -19,8 +19,10 @@ export interface LiquidGlassOptions {
   splay?: number
   /** Light source direction in degrees, 0 = light from the top (0–360, default 0). */
   lightAngle?: number
-  /** Brightness of the directional specular rim and subtle inner reflection (0–100, default 40). */
+  /** Brightness of the directional specular rim (0–100, default 40). */
   lightIntensity?: number
+  /** Natural white inner glow / volumetric specular bloom inside the glass (0–100, default 28). */
+  glow?: number
   /**
    * Corner radius. Number = px, string = any CSS radius (`'24px'`, `'50%'`).
    * Omit to inherit the parent's radius.
@@ -94,4 +96,5 @@ export const DEFAULTS: Required<
   splay: 20,
   lightAngle: 0,
   lightIntensity: 40,
+  glow: 28,
 }

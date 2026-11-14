@@ -4,6 +4,7 @@
   --lg-frost-sat: 104.8%;
   --lg-light-angle: 0deg;
   --lg-light: 0.8;
+  --lg-glow: 0.28;
   --lg-lx: 0;
   --lg-ly: -1;
 }
@@ -67,13 +68,26 @@
   backdrop-filter: blur(var(--lg-frost-blur)) saturate(var(--lg-frost-sat));
 }
 
-/* Subtle inner reflection: directional lit sheen & soft counter-bounce (no dark vignette ring) */
+/* Natural white inner glow & directional volumetric specular bloom */
 .lg-glow {
   z-index: 0;
+  background:
+    radial-gradient(
+      85% 85% at calc(50% + var(--lg-lx) * 40%) calc(50% + var(--lg-ly) * 40%),
+      rgb(255 255 255 / calc(0.28 * var(--lg-glow))) 0%,
+      rgb(255 255 255 / calc(0.09 * var(--lg-glow))) 42%,
+      rgb(255 255 255 / 0) 76%
+    ),
+    radial-gradient(
+      65% 65% at calc(50% - var(--lg-lx) * 42%) calc(50% - var(--lg-ly) * 42%),
+      rgb(255 255 255 / calc(0.08 * var(--lg-glow))) 0%,
+      rgb(255 255 255 / 0) 70%
+    );
   box-shadow:
-    inset calc(var(--lg-lx) * -3px) calc(var(--lg-ly) * -3px) 8px -2px rgb(255 255 255 / calc(0.11 * var(--lg-light))),
-    inset calc(var(--lg-lx) * -10px) calc(var(--lg-ly) * -10px) 22px -6px rgb(255 255 255 / calc(0.04 * var(--lg-light))),
-    inset calc(var(--lg-lx) * 3px) calc(var(--lg-ly) * 3px) 9px -3px rgb(255 255 255 / calc(0.04 * var(--lg-light)));
+    inset 0 0 24px -4px rgb(255 255 255 / calc(0.22 * var(--lg-glow))),
+    inset calc(var(--lg-lx) * -6px) calc(var(--lg-ly) * -6px) 18px -2px rgb(255 255 255 / calc(0.32 * var(--lg-glow))),
+    inset calc(var(--lg-lx) * -14px) calc(var(--lg-ly) * -14px) 36px -6px rgb(255 255 255 / calc(0.16 * var(--lg-glow))),
+    inset calc(var(--lg-lx) * 4px) calc(var(--lg-ly) * 4px) 12px -3px rgb(255 255 255 / calc(0.08 * var(--lg-glow)));
 }
 
 /*
