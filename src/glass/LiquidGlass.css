@@ -1,5 +1,16 @@
 .lg-root {
   box-sizing: border-box;
+  /* Built-in Apple Liquid Glass outer hairline contour, subtle elevation, and soft inner bevel
+     depth so glass remains crisp and legible globally — including on pure white backgrounds. */
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.18),
+    1.25px 0 0 -0.75px rgb(0 0 0 / 0.14),
+    -1.25px 0 0 -0.75px rgb(0 0 0 / 0.14),
+    0 2px 8px -2px rgb(0 0 0 / 0.08),
+    0 8px 24px -6px rgb(0 0 0 / 0.06),
+    inset 0 12px 12px -10px rgb(40 40 40 / 0.16),
+    inset 0 -12px 12px -10px rgb(40 40 40 / 0.14),
+    inset 0 24px 22px -20px rgb(230 230 230 / 0.2);
   --lg-frost-blur: 1.2px;
   --lg-frost-sat: 104.8%;
   --lg-light-angle: 0deg;
