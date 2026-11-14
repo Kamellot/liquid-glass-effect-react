@@ -51,14 +51,17 @@ function parseRadiusValue(raw: string, refDim: number): number {
   return token.endsWith('%') ? (val / 100) * refDim : val
 }
 
-function measureElementBox(el: HTMLElement): BoxMetrics {
+function measureElementBox(el: HTMLElement, explicitRadius?: number | string): BoxMetrics {
   const width = Math.max(0, Math.round(el.offsetWidth || el.getBoundingClientRect().width))
   const height = Math.max(0, Math.round(el.offsetHeight || el.getBoundingClientRect().height))
   if (width === 0 || height === 0) {
     return { width: 0, height: 0, borderRadius: 0 }
   }
-  const cs = getComputedStyle(el)
   const minDim = Math.min(width, height)
+  if (typeof explicitRadius === 'number' && Number.isFinite(explicitRadius)) {
+    return { width, height, borderRadius: Math.max(0, Math.min(explicitRadius, minDim * 0.5)) }
+  }
+  const cs = getComputedStyle(el)
   const rTL = parseRadiusValue(cs.borderTopLeftRadius, minDim)
   const rTR = parseRadiusValue(cs.borderTopRightRadius, minDim)
   const rBR = parseRadiusValue(cs.borderBottomRightRadius, minDim)
@@ -122,11 +125,12 @@ export const LiquidGlass = memo(function LiquidGlass({
     offsetY: number
     refraction: number
     dispersion: number
+    frost: number
     tint: string
     fieldHash: string
   } | null>(null)
-  const opticsRef = useRef({ refraction, dispersion })
-  opticsRef.current = { refraction, dispersion }
+  const opticsRef = useRef({ refraction, dispersion, frost })
+  opticsRef.current = { refraction, dispersion, frost }
 
   const onMapUpdateRef = useRef(onMapUpdate)
   onMapUpdateRef.current = onMapUpdate
@@ -155,7 +159,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     if (!el) return
 
     const update = () => {
-      const next = measureElementBox(el)
+      const next = measureElementBox(el, borderRadiusProp)
       setMetrics((prev) =>
         prev.width === next.width && prev.height === next.height && prev.borderRadius === next.borderRadius
           ? prev
@@ -207,9 +211,11 @@ export const LiquidGlass = memo(function LiquidGlass({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const { refraction: curRefraction, dispersion: curDispersion } = opticsRef.current
+    const { refraction: curRefraction, dispersion: curDispersion, frost: curFrost } = opticsRef.current
+    const webgl = isWebGLRefractionAvailable()
     const snapshot = getTargetSnapshot(targetEl, root)
-    if (!snapshot || curRefraction <= 0.01) {
+    const hasEffect = curRefraction > 0.01 || (webgl && curFrost > 0.05)
+    if (!snapshot || !hasEffect) {
       if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
       if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
@@ -230,6 +236,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       Math.abs(prev.offsetY - offsetY) < 0.25 &&
       prev.refraction === curRefraction &&
       prev.dispersion === curDispersion &&
+      prev.frost === (webgl ? curFrost : 0) &&
       prev.tint === parentTintRef.current &&
       prev.fieldHash === field.hash
     ) {
@@ -240,7 +247,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
 
     if (
-      !isWebGLRefractionAvailable() &&
+      !webgl &&
       (!outImageRef.current ||
         outImageRef.current.width !== field.bufWidth ||
         outImageRef.current.height !== field.bufHeight)
@@ -258,6 +265,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       curRefraction,
       curDispersion,
       parentTintRef.current,
+      curFrost,
     )
     lastDrawRef.current = {
       version: snapshot.version,
@@ -265,6 +273,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       offsetY,
       refraction: curRefraction,
       dispersion: curDispersion,
+      frost: webgl ? curFrost : 0,
       tint: parentTintRef.current,
       fieldHash: field.hash,
     }
@@ -315,7 +324,9 @@ export const LiquidGlass = memo(function LiquidGlass({
     )
 
     fieldRef.current = field
-    drawFrame()
+    if (rootRef.current) {
+      scheduleGlassDraw(rootRef.current, drawFrame)
+    }
 
     onMapUpdateRef.current?.({
       fieldId: opticsRef.current.refraction > 0.01 && depth > 0.5 ? field.fieldId : null,
@@ -334,7 +345,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     }
   }, [targetEl, metrics, depth, splay, drawFrame])
 
-  // Redraw when refraction/dispersion change without regenerating the bevel field
+  // Redraw when refraction/dispersion/frost change without regenerating the bevel field
   useLayoutEffect(() => {
     if (rootRef.current) {
       scheduleGlassDraw(rootRef.current, drawFrame)
@@ -358,19 +369,32 @@ export const LiquidGlass = memo(function LiquidGlass({
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refraction, dispersion, drawFrame])
+  }, [refraction, dispersion, frost, drawFrame])
 
-  // Subscribe to shared target snapshot + track movement, tints & transitions with zero-frame lag
+  // Subscribe to shared target snapshot + track movement, tints & transitions cleanly
   useLayoutEffect(() => {
-    if (!targetEl) return
     const root = rootRef.current
     if (!root) return
 
-    let scrollRaf = 0
+    if (!targetEl) {
+      return observeGlassIntersection(root, (isIntersecting) => {
+        isVisibleRef.current = isIntersecting
+        if (isIntersecting) {
+          if (root.hasAttribute('data-lg-offscreen')) root.removeAttribute('data-lg-offscreen')
+        } else if (!root.hasAttribute('data-lg-offscreen')) {
+          root.setAttribute('data-lg-offscreen', '1')
+        }
+      })
+    }
+
     let animRaf = 0
     let animDeadline = 0
 
     const syncTint = () => {
+      if (tint !== undefined && tint.trim().startsWith('rgb')) {
+        parentTintRef.current = isTransparent(tint) ? '' : tint
+        return
+      }
       const colorSource = tint !== undefined || mode !== 'layer' ? root : root.parentElement
       if (!colorSource) {
         parentTintRef.current = ''
@@ -404,7 +428,7 @@ export const LiquidGlass = memo(function LiquidGlass({
     const onTransitionFinish = () => {
       stopAnimLoop()
       syncTint()
-      drawFrame()
+      scheduleGlassDraw(root, drawFrame)
     }
 
     const scheduleDraw = () => {
@@ -414,7 +438,7 @@ export const LiquidGlass = memo(function LiquidGlass({
 
     const unsubSnapshot = subscribeTargetSnapshot(targetEl, scheduleDraw, root)
     syncTint()
-    drawFrame()
+    scheduleGlassDraw(root, drawFrame)
 
     const unsubIo = observeGlassIntersection(root, (isIntersecting) => {
       const wasVisible = isVisibleRef.current
@@ -471,7 +495,6 @@ export const LiquidGlass = memo(function LiquidGlass({
     window.addEventListener('resize', scheduleDraw, { passive: true })
 
     return () => {
-      if (scrollRaf) cancelAnimationFrame(scrollRaf)
       cancelGlassDraw(root)
       stopAnimLoop()
       unsubSnapshot()
@@ -567,6 +590,8 @@ export const LiquidGlass = memo(function LiquidGlass({
     .filter(Boolean)
     .join(' ')
 
+  const useWebGLFrost = Boolean(targetEl) && isWebGLRefractionAvailable()
+
   return (
     <div
       ref={rootRef}
@@ -583,8 +608,8 @@ export const LiquidGlass = memo(function LiquidGlass({
         </div>
       )}
 
-      {/* Pipeline order: canvas refraction (+ dispersion) first, then frost blur & Figma Fill + Shadow */}
-      {frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
+      {/* Pipeline order: canvas refraction (+ dispersion & WebGL frost), CSS frost only when fallback/no-target */}
+      {!useWebGLFrost && frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
       {fillLayerStyle && <div className="lg-fill" style={fillLayerStyle} aria-hidden="true" />}
 
       {glow > 0.05 && <div className="lg-glow" aria-hidden="true" />}

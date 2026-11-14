@@ -84,7 +84,7 @@ export function observeGlassResize(el: Element, cb: ResizeCallback): () => void 
   }
 }
 
-const FRAME_BUDGET_MS = 8
+const FRAME_BUDGET_MS = 5
 const pendingDraws = new Map<object, () => void>()
 let batchRaf = 0
 
@@ -104,7 +104,7 @@ function flushBatch(): void {
     fn()
     processed += 1
 
-    if (processed >= 6 && pendingDraws.size > 0) {
+    if (processed >= 4 && pendingDraws.size > 0) {
       const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - start
       if (elapsed >= FRAME_BUDGET_MS) {
         batchRaf = requestAnimationFrame(flushBatch)

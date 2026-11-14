@@ -37,6 +37,8 @@ interface GlState {
   uSnapTexel: WebGLUniformLocation | null
   uDispCssPx: WebGLUniformLocation | null
   uSpread: WebGLUniformLocation | null
+  uFrostPx: WebGLUniformLocation | null
+  uSat: WebGLUniformLocation | null
   uTint: WebGLUniformLocation | null
   textures: WeakMap<HTMLCanvasElement, CachedSnapTexture>
   contextLost: boolean
@@ -68,6 +70,8 @@ uniform vec2 u_snapSize;
 uniform vec2 u_snapTexel;
 uniform float u_dispCssPx;
 uniform float u_spread;
+uniform float u_frostPx;
+uniform float u_sat;
 uniform vec4 u_tint;
 
 float evalBevelMag(float u, float p) {
@@ -82,8 +86,34 @@ vec4 sampleSnap(vec2 cssPos) {
   return texture2D(u_snapshot, uv);
 }
 
+vec3 applySat(vec3 c, float sat) {
+  float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  return clamp(mix(vec3(luma), c, sat), 0.0, 1.0);
+}
+
+vec4 sampleFrostedSnap(vec2 cssPos) {
+  if (u_frostPx <= 0.05) {
+    return sampleSnap(cssPos);
+  }
+  float r1 = u_frostPx * 0.55;
+  float r2 = u_frostPx * 1.15;
+  vec4 acc = sampleSnap(cssPos) * 0.22;
+  acc += sampleSnap(cssPos + vec2( r1,  0.0)) * 0.11;
+  acc += sampleSnap(cssPos + vec2(-r1,  0.0)) * 0.11;
+  acc += sampleSnap(cssPos + vec2( 0.0,  r1)) * 0.11;
+  acc += sampleSnap(cssPos + vec2( 0.0, -r1)) * 0.11;
+  acc += sampleSnap(cssPos + vec2( r2 * 0.7071,  r2 * 0.7071)) * 0.085;
+  acc += sampleSnap(cssPos + vec2(-r2 * 0.7071,  r2 * 0.7071)) * 0.085;
+  acc += sampleSnap(cssPos + vec2( r2 * 0.7071, -r2 * 0.7071)) * 0.085;
+  acc += sampleSnap(cssPos + vec2(-r2 * 0.7071, -r2 * 0.7071)) * 0.085;
+  acc.rgb = applySat(acc.rgb, u_sat);
+  return acc;
+}
+
 void main() {
-  if (u_effectiveDepth <= 0.5 || u_dispCssPx <= 0.001) {
+  bool hasRefract = u_effectiveDepth > 0.5 && u_dispCssPx > 0.001;
+  bool hasFrost = u_frostPx > 0.05;
+  if (!hasRefract && !hasFrost) {
     gl_FragColor = vec4(0.0);
     return;
   }
@@ -107,8 +137,12 @@ void main() {
 
   float outerAlpha = sd <= 0.0 ? 1.0 : 1.0 - sd / 0.75;
   float distInward = sd < 0.0 ? -sd : 0.0;
-  if (distInward >= u_effectiveDepth) {
-    vec4 s = sampleSnap(fragCss);
+  if (!hasRefract || distInward >= u_effectiveDepth) {
+    if (!hasFrost) {
+      gl_FragColor = vec4(0.0);
+      return;
+    }
+    vec4 s = sampleFrostedSnap(fragCss);
     vec3 rgb = s.rgb;
     if (u_tint.a > 0.001) {
       rgb = mix(rgb, u_tint.rgb, u_tint.a);
@@ -151,12 +185,13 @@ void main() {
 
   float sxSign = fragCss.x < u_halfSize.x ? 1.0 : -1.0;
   float sySign = fragCss.y < u_halfSize.y ? 1.0 : -1.0;
-  vec2 disp = vec2(ux * sxSign, uy * sySign) * (mag * u_dispCssPx);
+  vec2 dir = vec2(ux * sxSign, uy * sySign);
+  vec2 disp = dir * (mag * u_dispCssPx);
 
   vec3 rgb;
   float sA;
   if (u_spread <= 0.0005) {
-    vec4 s = sampleSnap(fragCss + disp);
+    vec4 s = sampleFrostedSnap(fragCss + disp);
     rgb = s.rgb;
     sA = s.a;
   } else {
@@ -164,16 +199,22 @@ void main() {
     float m1 = 1.0 - u_spread * 0.5;
     float m3 = 1.0 + u_spread * 0.5;
     float m4 = 1.0 + u_spread;
+    vec2 perp = vec2(-dir.y, dir.x) * (u_frostPx * 0.65);
 
-    vec4 s0 = sampleSnap(fragCss + disp * m0);
-    vec4 s1 = sampleSnap(fragCss + disp * m1);
+    vec4 s0 = sampleSnap(fragCss + disp * m0 + perp);
+    vec4 s1 = sampleSnap(fragCss + disp * m1 - perp * 0.75);
     vec4 s2 = sampleSnap(fragCss + disp);
-    vec4 s3 = sampleSnap(fragCss + disp * m3);
-    vec4 s4 = sampleSnap(fragCss + disp * m4);
+    vec4 s3 = sampleSnap(fragCss + disp * m3 + perp * 0.75);
+    vec4 s4 = sampleSnap(fragCss + disp * m4 - perp);
 
     rgb.r = s0.r * 0.65 + s1.r * 0.35;
     rgb.g = s1.g * 0.22 + s2.g * 0.56 + s3.g * 0.22;
     rgb.b = s3.b * 0.35 + s4.b * 0.65;
+    if (hasFrost) {
+      vec3 avgRgb = (s0.rgb + s1.rgb + s2.rgb + s3.rgb + s4.rgb) * 0.2;
+      rgb = mix(rgb, avgRgb, clamp(u_frostPx / 12.0, 0.0, 0.42));
+      rgb = applySat(rgb, u_sat);
+    }
     sA = s2.a;
   }
 
@@ -287,6 +328,8 @@ function initGlState(): GlState | null {
     uSnapTexel: gl.getUniformLocation(program, 'u_snapTexel'),
     uDispCssPx: gl.getUniformLocation(program, 'u_dispCssPx'),
     uSpread: gl.getUniformLocation(program, 'u_spread'),
+    uFrostPx: gl.getUniformLocation(program, 'u_frostPx'),
+    uSat: gl.getUniformLocation(program, 'u_sat'),
     uTint: gl.getUniformLocation(program, 'u_tint'),
     textures: new WeakMap(),
     contextLost: false,
@@ -351,6 +394,7 @@ export function renderRefractedBevelWebGL(
   dispCssPx: number,
   spread: number,
   tintRgba: [number, number, number, number] | null,
+  frost = 0,
 ): boolean {
   const state = initGlState()
   if (!state) return false
@@ -420,8 +464,11 @@ export function renderRefractedBevelWebGL(
   gl.uniform2f(state.uSnapOffset, offsetX, offsetY)
   gl.uniform2f(state.uSnapSize, snapshot.cssWidth, snapshot.cssHeight)
   gl.uniform2f(state.uSnapTexel, 0.5 / snapshot.width, 0.5 / snapshot.height)
+  const frostClamped = frost < 0 ? 0 : frost > 100 ? 100 : frost
   gl.uniform1f(state.uDispCssPx, dispCssPx)
   gl.uniform1f(state.uSpread, spread)
+  gl.uniform1f(state.uFrostPx, frostClamped * 0.2)
+  gl.uniform1f(state.uSat, 1 + frostClamped * 0.008)
   if (tintRgba) {
     gl.uniform4f(state.uTint, tintRgba[0], tintRgba[1], tintRgba[2], tintRgba[3])
   } else {

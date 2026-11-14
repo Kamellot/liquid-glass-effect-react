@@ -174,9 +174,9 @@ export function buildBevelHash(spec: BevelSpec): string {
 export function chooseRenderScale(width: number, height: number, depth: number): number {
   const maxDpr = typeof window !== 'undefined' ? clamp(window.devicePixelRatio || 1, 1, 2) : 1
   if (isWebGLRefractionAvailable()) {
-    const area = width * height
-    const areaCap = area > 450_000 ? 0.75 : area > 180_000 ? 1 : area > 80_000 ? 1.5 : maxDpr
-    return Math.round(Math.min(maxDpr, areaCap) * 4) / 4
+    const area = Math.max(1, width * height)
+    const pixelBudgetCap = Math.sqrt(140_000 / area)
+    return Math.round(clamp(pixelBudgetCap, 0.4, maxDpr) * 4) / 4
   }
   const effectiveDepth = clamp(depth, 0, Math.min(width, height) * 0.5)
   const approxBevelPx = Math.min(width * height, 2 * (width + height) * effectiveDepth)
@@ -554,9 +554,12 @@ export function renderRefractedBevel(
   refraction: number,
   dispersion: number,
   tintColor = '',
+  frost = 0,
 ): void {
   const dispCssPx = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth * 1.5
-  if (dispCssPx <= 0.001 || field.effectiveDepth <= 0.5) {
+  const hasRefract = dispCssPx > 0.001 && field.effectiveDepth > 0.5
+  const hasFrost = frost > 0.05
+  if (!hasRefract && !hasFrost) {
     ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
     return
   }
@@ -571,9 +574,10 @@ export function renderRefractedBevel(
       snapshot,
       offsetX,
       offsetY,
-      dispCssPx,
+      hasRefract ? dispCssPx : 0,
       spread,
       parsedTint,
+      frost,
     )
   ) {
     if (tintColor && !parsedTint) {
@@ -583,6 +587,11 @@ export function renderRefractedBevel(
       ctx.fillRect(0, 0, field.bufWidth, field.bufHeight)
       ctx.restore()
     }
+    return
+  }
+
+  if (!hasRefract) {
+    ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
     return
   }
 
