@@ -382,6 +382,17 @@ export const LiquidGlass = memo(function LiquidGlass({
       io.observe(root)
     }
 
+    const needsScrollSync = (() => {
+      if (!targetEl.contains(root)) return true
+      let node: HTMLElement | null = root
+      while (node && node !== targetEl) {
+        const pos = getComputedStyle(node).position
+        if (pos === 'fixed' || pos === 'sticky') return true
+        node = node.parentElement
+      }
+      return false
+    })()
+
     const scheduleScrollDraw = () => {
       if (!isVisibleRef.current) return
       if (!scrollRaf) {
@@ -423,7 +434,9 @@ export const LiquidGlass = memo(function LiquidGlass({
     parentEl?.addEventListener('transitionrun', startAnimLoop)
     parentEl?.addEventListener('transitionend', onTransitionFinish)
     parentEl?.addEventListener('transitioncancel', onTransitionFinish)
-    window.addEventListener('scroll', scheduleScrollDraw, { passive: true, capture: true })
+    if (needsScrollSync) {
+      window.addEventListener('scroll', scheduleScrollDraw, { passive: true, capture: true })
+    }
     window.addEventListener('resize', scheduleScrollDraw, { passive: true })
 
     return () => {
@@ -439,7 +452,9 @@ export const LiquidGlass = memo(function LiquidGlass({
       parentEl?.removeEventListener('transitionrun', startAnimLoop)
       parentEl?.removeEventListener('transitionend', onTransitionFinish)
       parentEl?.removeEventListener('transitioncancel', onTransitionFinish)
-      window.removeEventListener('scroll', scheduleScrollDraw, true)
+      if (needsScrollSync) {
+        window.removeEventListener('scroll', scheduleScrollDraw, true)
+      }
       window.removeEventListener('resize', scheduleScrollDraw)
     }
   }, [targetEl, mode, tint, drawFrame])
