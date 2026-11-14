@@ -9,7 +9,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from 'react'
-import { getTargetSnapshot, isTransparent, subscribeTargetSnapshot } from './domSnapshot'
+import { getTargetSnapshot, isTransparent, notifyGlassRedrawn, subscribeTargetSnapshot } from './domSnapshot'
 import {
   acquireBevelField,
   chooseRenderScale,
@@ -147,9 +147,10 @@ export const LiquidGlass = memo(function LiquidGlass({
     if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
 
     const { refraction: curRefraction, dispersion: curDispersion } = opticsRef.current
-    const snapshot = getTargetSnapshot(targetEl)
+    const snapshot = getTargetSnapshot(targetEl, root)
     if (!snapshot || curRefraction <= 0.01) {
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+      notifyGlassRedrawn(targetEl, root)
       return
     }
 
@@ -178,6 +179,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       curDispersion,
       parentTintRef.current,
     )
+    notifyGlassRedrawn(targetEl, root)
   }, [targetEl])
 
   // Acquire shared 1/4-SDF bevel field before paint & emit debug R/G map
@@ -314,7 +316,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       drawFrame()
     }
 
-    const unsubSnapshot = subscribeTargetSnapshot(targetEl, drawFrame)
+    const unsubSnapshot = subscribeTargetSnapshot(targetEl, drawFrame, root)
     syncTint()
     drawFrame()
 

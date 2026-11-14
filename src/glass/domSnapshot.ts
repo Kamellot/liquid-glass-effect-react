@@ -15,6 +15,17 @@ interface AssetEntry {
   waiters: Set<() => void>
 }
 
+interface ConsumerRecord {
+  onUpdate: () => void
+  rootEl: HTMLElement | null
+  scopeEl: HTMLElement | null
+  compCanvas: HTMLCanvasElement | null
+  compCtx: CanvasRenderingContext2D | null
+  compVersion: number
+  compSnapshot: TargetSnapshot | null
+  lastOverlappedScopes: Set<HTMLElement>
+}
+
 interface SnapshotEntry {
   target: HTMLElement
   canvas: HTMLCanvasElement
@@ -24,7 +35,10 @@ interface SnapshotEntry {
   isVisible: boolean
   deferredWhileHidden: boolean
   videoCallbacks: WeakSet<HTMLVideoElement>
-  consumers: Set<() => void>
+  consumers: Map<() => void, ConsumerRecord>
+  notifyingScopes: Set<HTMLElement>
+  dirtyScopes: Set<HTMLElement>
+  dirtyScopeRaf: number
   ro: ResizeObserver
   mo: MutationObserver
   io: IntersectionObserver | null
@@ -35,6 +49,7 @@ interface SnapshotEntry {
 }
 
 const MAX_SNAP_DIM = 2200
+const OVERLAP_MARGIN = 64
 const assetCache = new Map<string, AssetEntry>()
 const snapshotRegistry = new Map<HTMLElement, SnapshotEntry>()
 const statsListeners = new Set<() => void>()
@@ -694,8 +709,10 @@ function paintElementTree(
   onAssetReady: () => void,
   isRootTarget: boolean,
   onVideoPlaying?: (video: HTMLVideoElement) => void,
+  skipElements?: Set<Element>,
 ): void {
-  if (!isRootTarget && (el.hasAttribute('data-lg-root') || el.hasAttribute('data-lg-ignore'))) {
+  if (skipElements?.has(el)) return
+  if (!isRootTarget && !skipElements && (el.hasAttribute('data-lg-root') || el.hasAttribute('data-lg-ignore'))) {
     return
   }
 
@@ -838,7 +855,7 @@ function paintElementTree(
     }
   }
   for (const childEl of orderedChildElements(el)) {
-    paintElementTree(ctx, childEl, targetRect, snapScale, onAssetReady, false, onVideoPlaying)
+    paintElementTree(ctx, childEl, targetRect, snapScale, onAssetReady, false, onVideoPlaying, skipElements)
   }
 
   ctx.restore()
@@ -874,6 +891,140 @@ function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void
   }
 }
 
+function createTargetSnapshot(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  version: number,
+  width: number,
+  height: number,
+  scale: number,
+  cssWidth: number,
+  cssHeight: number,
+): TargetSnapshot {
+  let cachedData: Uint8ClampedArray | null = null
+  let dataFailed = false
+
+  return {
+    canvas,
+    version,
+    width,
+    height,
+    scale,
+    cssWidth,
+    cssHeight,
+    get data(): Uint8ClampedArray {
+      if (cachedData) return cachedData
+      if (dataFailed) return new Uint8ClampedArray(0)
+      try {
+        cachedData = ctx.getImageData(0, 0, width, height).data
+        return cachedData
+      } catch {
+        dataFailed = true
+        return new Uint8ClampedArray(0)
+      }
+    },
+  }
+}
+
+function resolveGlassScope(rootEl: HTMLElement, targetEl: HTMLElement): HTMLElement {
+  let cur: HTMLElement | null = rootEl.parentElement
+  while (cur && cur !== targetEl) {
+    if (cur.hasAttribute('data-lg-root')) return rootEl
+    if (cur.hasAttribute('data-lg-ignore')) return cur
+    cur = cur.parentElement
+  }
+  return rootEl
+}
+
+function getStackingPath(el: HTMLElement, root: HTMLElement): { el: HTMLElement; z: number }[] {
+  const path: { el: HTMLElement; z: number }[] = []
+  let cur: HTMLElement | null = el
+  while (cur && cur !== root) {
+    const cs = getComputedStyle(cur)
+    const z = cs.zIndex !== 'auto' ? parseInt(cs.zIndex, 10) || 0 : 0
+    const createsSc =
+      (cs.position !== 'static' && cs.zIndex !== 'auto') ||
+      cs.position === 'fixed' ||
+      cs.position === 'sticky' ||
+      parseFloat(cs.opacity) < 0.999 ||
+      cs.transform !== 'none' ||
+      cs.isolation === 'isolate' ||
+      cs.filter !== 'none' ||
+      cs.backdropFilter !== 'none'
+    if (cur === el || createsSc || cs.zIndex !== 'auto') {
+      path.push({ el: cur, z })
+    }
+    cur = cur.parentElement
+  }
+  path.reverse()
+  return path
+}
+
+function comparePaintOrder(a: HTMLElement, b: HTMLElement, root: HTMLElement): number {
+  if (a === b) return 0
+  if (a.contains(b)) return -1
+  if (b.contains(a)) return 1
+
+  const pathA = getStackingPath(a, root)
+  const pathB = getStackingPath(b, root)
+  const len = Math.min(pathA.length, pathB.length)
+
+  for (let i = 0; i < len; i++) {
+    if (pathA[i].el === pathB[i].el) continue
+    if (pathA[i].z !== pathB[i].z) return pathA[i].z - pathB[i].z
+    return pathA[i].el.compareDocumentPosition(pathB[i].el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+  }
+  return pathA.length - pathB.length
+}
+
+function rectsOverlap(a: DOMRect, b: DOMRect, margin: number): boolean {
+  return (
+    a.left < b.right + margin &&
+    a.right > b.left - margin &&
+    a.top < b.bottom + margin &&
+    a.bottom > b.top - margin
+  )
+}
+
+function getOrderedConsumers(entry: SnapshotEntry): ConsumerRecord[] {
+  const list = Array.from(entry.consumers.values())
+  if (list.length <= 1) return list
+  list.sort((a, b) => {
+    if (!a.scopeEl || !b.scopeEl) return 0
+    return comparePaintOrder(a.scopeEl, b.scopeEl, entry.target)
+  })
+  return list
+}
+
+function notifyScopesAbove(entry: SnapshotEntry, scopes: Iterable<HTMLElement>): void {
+  const scopeSet = new Set(scopes)
+  if (scopeSet.size === 0 || entry.consumers.size <= 1) return
+
+  const toNotify: ConsumerRecord[] = []
+  for (const rec of entry.consumers.values()) {
+    if (!rec.scopeEl) continue
+    for (const scopeEl of scopeSet) {
+      if (rec.scopeEl === scopeEl) continue
+      if (comparePaintOrder(scopeEl, rec.scopeEl, entry.target) < 0) {
+        const overlaps =
+          rec.lastOverlappedScopes.has(scopeEl) ||
+          rectsOverlap(scopeEl.getBoundingClientRect(), rec.scopeEl.getBoundingClientRect(), OVERLAP_MARGIN)
+        if (overlaps) {
+          toNotify.push(rec)
+          break
+        }
+      }
+    }
+  }
+
+  if (toNotify.length > 1) {
+    toNotify.sort((a, b) => comparePaintOrder(a.scopeEl!, b.scopeEl!, entry.target))
+  }
+  for (const rec of toNotify) {
+    rec.onUpdate()
+  }
+}
+
 function captureSnapshotNow(entry: SnapshotEntry): void {
   entry.rafId = 0
   entry.deferredWhileHidden = false
@@ -904,32 +1055,11 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
   paintElementTree(ctx, entry.target, rect, scale, schedule, true, onVideoPlaying)
 
   entry.version += 1
-  const snapVersion = entry.version
-  let cachedData: Uint8ClampedArray | null = null
-  let dataFailed = false
+  entry.snapshot = createTargetSnapshot(entry.canvas, ctx, entry.version, bufW, bufH, scale, cssW, cssH)
 
-  entry.snapshot = {
-    canvas: entry.canvas,
-    version: snapVersion,
-    width: bufW,
-    height: bufH,
-    scale,
-    cssWidth: cssW,
-    cssHeight: cssH,
-    get data(): Uint8ClampedArray {
-      if (cachedData) return cachedData
-      if (dataFailed) return new Uint8ClampedArray(0)
-      try {
-        cachedData = ctx.getImageData(0, 0, bufW, bufH).data
-        return cachedData
-      } catch {
-        dataFailed = true
-        return new Uint8ClampedArray(0)
-      }
-    },
+  for (const rec of getOrderedConsumers(entry)) {
+    rec.onUpdate()
   }
-
-  for (const notify of entry.consumers) notify()
 }
 
 function scheduleSnapshotRefresh(entry: SnapshotEntry): void {
@@ -941,15 +1071,120 @@ function scheduleSnapshotRefresh(entry: SnapshotEntry): void {
   entry.rafId = requestAnimationFrame(() => captureSnapshotNow(entry))
 }
 
-export function getTargetSnapshot(target: HTMLElement): TargetSnapshot | null {
-  return snapshotRegistry.get(target)?.snapshot ?? null
+function scheduleDirtyScopeNotify(entry: SnapshotEntry, scopeEl: HTMLElement): void {
+  entry.dirtyScopes.add(scopeEl)
+  if (entry.dirtyScopeRaf) return
+  entry.dirtyScopeRaf = requestAnimationFrame(() => {
+    entry.dirtyScopeRaf = 0
+    if (entry.dirtyScopes.size === 0) return
+    const scopes = Array.from(entry.dirtyScopes)
+    entry.dirtyScopes.clear()
+    notifyScopesAbove(entry, scopes)
+  })
+}
+
+export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | null): TargetSnapshot | null {
+  const entry = snapshotRegistry.get(target)
+  if (!entry || !entry.snapshot) return null
+  const base = entry.snapshot
+
+  if (!rootEl || entry.consumers.size <= 1) return base
+
+  const consumerScope = resolveGlassScope(rootEl, target)
+  let consumerRec: ConsumerRecord | undefined
+  for (const rec of entry.consumers.values()) {
+    if (rec.rootEl === rootEl) {
+      consumerRec = rec
+      break
+    }
+  }
+  if (!consumerRec) return base
+
+  const consumerRect = consumerScope.getBoundingClientRect()
+  const lowerScopes: HTMLElement[] = []
+  const seenScopes = new Set<HTMLElement>()
+  const skipElements = new Set<Element>([consumerScope, rootEl])
+
+  for (const rec of entry.consumers.values()) {
+    const otherScope = rec.scopeEl
+    if (!otherScope || otherScope === consumerScope) continue
+    const order = comparePaintOrder(otherScope, consumerScope, target)
+    if (order >= 0) {
+      skipElements.add(otherScope)
+      continue
+    }
+    if (seenScopes.has(otherScope)) continue
+    seenScopes.add(otherScope)
+    if (rectsOverlap(otherScope.getBoundingClientRect(), consumerRect, OVERLAP_MARGIN)) {
+      lowerScopes.push(otherScope)
+    }
+  }
+
+  consumerRec.lastOverlappedScopes = new Set(lowerScopes)
+  if (lowerScopes.length === 0) return base
+
+  lowerScopes.sort((a, b) => comparePaintOrder(a, b, target))
+
+  if (!consumerRec.compCanvas) {
+    consumerRec.compCanvas = document.createElement('canvas')
+    consumerRec.compCtx = consumerRec.compCanvas.getContext('2d')
+  }
+  const compCanvas = consumerRec.compCanvas
+  const compCtx = consumerRec.compCtx
+  if (!compCtx) return base
+
+  if (compCanvas.width !== base.width) compCanvas.width = base.width
+  if (compCanvas.height !== base.height) compCanvas.height = base.height
+
+  compCtx.setTransform(1, 0, 0, 1, 0, 0)
+  compCtx.clearRect(0, 0, base.width, base.height)
+  compCtx.drawImage(base.canvas, 0, 0)
+  compCtx.setTransform(base.scale, 0, 0, base.scale, 0, 0)
+
+  const targetRect = target.getBoundingClientRect()
+  const schedule = () => scheduleSnapshotRefresh(entry)
+  const onVideoPlaying = (video: HTMLVideoElement) => scheduleVideoFrame(entry, video)
+
+  for (const lowerScope of lowerScopes) {
+    paintElementTree(compCtx, lowerScope, targetRect, base.scale, schedule, true, onVideoPlaying, skipElements)
+  }
+
+  consumerRec.compVersion += 1
+  consumerRec.compSnapshot = createTargetSnapshot(
+    compCanvas,
+    compCtx,
+    consumerRec.compVersion,
+    base.width,
+    base.height,
+    base.scale,
+    base.cssWidth,
+    base.cssHeight,
+  )
+  return consumerRec.compSnapshot
+}
+
+export function notifyGlassRedrawn(target: HTMLElement, rootEl: HTMLElement | null): void {
+  const entry = snapshotRegistry.get(target)
+  if (!entry || !rootEl || entry.consumers.size <= 1) return
+  const scopeEl = resolveGlassScope(rootEl, target)
+  if (entry.notifyingScopes.has(scopeEl)) return
+  entry.notifyingScopes.add(scopeEl)
+  try {
+    notifyScopesAbove(entry, [scopeEl])
+  } finally {
+    entry.notifyingScopes.delete(scopeEl)
+  }
 }
 
 /**
  * Registers a consumer for a shared offscreen DOM backdrop snapshot of `target`.
  * Multiple `<LiquidGlass />` components targeting the same scene share one snapshot buffer.
  */
-export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => void): () => void {
+export function subscribeTargetSnapshot(
+  target: HTMLElement,
+  onUpdate: () => void,
+  rootEl?: HTMLElement | null,
+): () => void {
   let entry = snapshotRegistry.get(target)
   if (!entry) {
     const canvas = document.createElement('canvas')
@@ -965,7 +1200,10 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       isVisible: true,
       deferredWhileHidden: false,
       videoCallbacks: new WeakSet(),
-      consumers: new Set(),
+      consumers: new Map(),
+      notifyingScopes: new Set(),
+      dirtyScopes: new Set(),
+      dirtyScopeRaf: 0,
       rafId: 0,
       fontsHooked: false,
       io: null,
@@ -980,10 +1218,15 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
       mo: new MutationObserver((records) => {
         for (const rec of records) {
           const el = rec.target instanceof Element ? rec.target : rec.target.parentElement
-          if (el && !el.closest('[data-lg-root], [data-lg-ignore]')) {
-            scheduleSnapshotRefresh(created)
-            break
+          if (!el) continue
+          if (el.closest('[data-lg-root]')) continue
+          const ignoredScope = el.closest('[data-lg-ignore]')
+          if (ignoredScope instanceof HTMLElement && ignoredScope !== created.target) {
+            scheduleDirtyScopeNotify(created, ignoredScope)
+            continue
           }
+          scheduleSnapshotRefresh(created)
+          break
         }
       }),
     }
@@ -1031,7 +1274,17 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
     notifySnapshotStats()
   }
 
-  entry.consumers.add(onUpdate)
+  const resolvedRoot = rootEl ?? null
+  entry.consumers.set(onUpdate, {
+    onUpdate,
+    rootEl: resolvedRoot,
+    scopeEl: resolvedRoot ? resolveGlassScope(resolvedRoot, target) : null,
+    compCanvas: null,
+    compCtx: null,
+    compVersion: 0,
+    compSnapshot: null,
+    lastOverlappedScopes: new Set(),
+  })
   if (!entry.snapshot) captureSnapshotNow(entry)
 
   return () => {
@@ -1040,6 +1293,7 @@ export function subscribeTargetSnapshot(target: HTMLElement, onUpdate: () => voi
     cur.consumers.delete(onUpdate)
     if (cur.consumers.size === 0) {
       if (cur.rafId) cancelAnimationFrame(cur.rafId)
+      if (cur.dirtyScopeRaf) cancelAnimationFrame(cur.dirtyScopeRaf)
       cur.ro.disconnect()
       cur.mo.disconnect()
       cur.io?.disconnect()
