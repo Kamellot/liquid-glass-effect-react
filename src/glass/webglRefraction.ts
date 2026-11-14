@@ -50,6 +50,8 @@ interface GlState {
   uBlur3: WebGLUniformLocation | null
   uBlur4: WebGLUniformLocation | null
   uBlur5: WebGLUniformLocation | null
+  uBlurSizes: WebGLUniformLocation | null
+  blurSizesBuf: Float32Array
   uSize: WebGLUniformLocation | null
   uHalfSize: WebGLUniformLocation | null
   uBoxHalf: WebGLUniformLocation | null
@@ -131,6 +133,7 @@ uniform sampler2D u_blur2;
 uniform sampler2D u_blur3;
 uniform sampler2D u_blur4;
 uniform sampler2D u_blur5;
+uniform vec2 u_blurSizes[5];
 uniform vec2 u_size;
 uniform vec2 u_halfSize;
 uniform vec2 u_boxHalf;
@@ -159,27 +162,53 @@ vec3 applySat(vec3 c, float sat) {
   return clamp(mix(vec3(luma), c, sat), 0.0, 1.0);
 }
 
-vec4 sampleTex4(sampler2D tex, vec2 uv, vec2 halfTexel) {
-  vec2 lo = halfTexel;
-  vec2 hi = 1.0 - halfTexel;
-  return (
-    texture2D(tex, clamp(uv + vec2(-halfTexel.x, -halfTexel.y), lo, hi)) +
-    texture2D(tex, clamp(uv + vec2( halfTexel.x, -halfTexel.y), lo, hi)) +
-    texture2D(tex, clamp(uv + vec2(-halfTexel.x,  halfTexel.y), lo, hi)) +
-    texture2D(tex, clamp(uv + vec2( halfTexel.x,  halfTexel.y), lo, hi))
-  ) * 0.25;
+// 4-tap Sigg-Hadwiger B-spline bicubic lookup via hardware bilinear filtering eliminates C1
+// texel-grid seams when upscaling coarse 1/16 and 1/32 frost pyramid levels.
+vec4 sampleBicubic(sampler2D tex, vec2 uv, vec2 texSize) {
+  vec2 invSize = 1.0 / texSize;
+  vec2 tc = uv * texSize - 0.5;
+  vec2 f = fract(tc);
+  tc -= f;
+
+  vec2 f1 = 1.0 - f;
+  vec2 f2 = f * f;
+  vec2 f12 = f1 * f1;
+
+  vec2 w0 = (f12 * f1) / 6.0;
+  vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f2 * f) / 6.0;
+  vec2 w3 = (f2 * f) / 6.0;
+  vec2 w2 = 1.0 - w0 - w1 - w3;
+
+  vec2 g0 = w0 + w1;
+  vec2 g1 = w2 + w3;
+  vec2 lo = 0.5 * invSize;
+  vec2 hi = 1.0 - lo;
+  vec2 h0 = clamp((tc - 0.5 + w1 / g0) * invSize, lo, hi);
+  vec2 h1 = clamp((tc + 1.5 + w3 / g1) * invSize, lo, hi);
+
+  vec4 c00 = texture2D(tex, vec2(h0.x, h0.y));
+  vec4 c10 = texture2D(tex, vec2(h1.x, h0.y));
+  vec4 c01 = texture2D(tex, vec2(h0.x, h1.y));
+  vec4 c11 = texture2D(tex, vec2(h1.x, h1.y));
+
+  return mix(mix(c11, c01, g0.x), mix(c10, c00, g0.x), g0.y);
+}
+
+// Interleaved gradient noise breaks up 8-bit UNSIGNED_BYTE banding across wide frosted gradients.
+float ignDither(vec2 coord) {
+  vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+  return fract(magic.z * fract(dot(coord, magic.xy))) - 0.5;
 }
 
 vec4 samplePyramidLevel(int idx, vec2 uv) {
   if (idx <= 0) {
     return texture2D(u_snapshot, clamp(uv, u_snapTexel, 1.0 - u_snapTexel));
   }
-  vec2 h = u_snapTexel * exp2(float(idx));
-  if (idx == 1) return sampleTex4(u_blur1, uv, h);
-  if (idx == 2) return sampleTex4(u_blur2, uv, h);
-  if (idx == 3) return sampleTex4(u_blur3, uv, h);
-  if (idx == 4) return sampleTex4(u_blur4, uv, h);
-  return sampleTex4(u_blur5, uv, h);
+  if (idx == 1) return sampleBicubic(u_blur1, uv, u_blurSizes[0]);
+  if (idx == 2) return sampleBicubic(u_blur2, uv, u_blurSizes[1]);
+  if (idx == 3) return sampleBicubic(u_blur3, uv, u_blurSizes[2]);
+  if (idx == 4) return sampleBicubic(u_blur4, uv, u_blurSizes[3]);
+  return sampleBicubic(u_blur5, uv, u_blurSizes[4]);
 }
 
 vec4 sampleFrostedSnap(vec2 cssPos) {
@@ -192,9 +221,14 @@ vec4 sampleFrostedSnap(vec2 cssPos) {
   int i0 = int(floor(lvl));
   int i1 = i0 < 5 ? i0 + 1 : 5;
   float f = lvl - float(i0);
-  vec4 c0 = samplePyramidLevel(i0, uv);
-  vec4 c1 = i1 == i0 ? c0 : samplePyramidLevel(i1, uv);
-  vec4 acc = mix(c0, c1, f);
+  vec4 acc;
+  if (i1 == i0 || f < 0.02) {
+    acc = samplePyramidLevel(i0, uv);
+  } else if (f > 0.98) {
+    acc = samplePyramidLevel(i1, uv);
+  } else {
+    acc = mix(samplePyramidLevel(i0, uv), samplePyramidLevel(i1, uv), f);
+  }
   acc.rgb = applySat(acc.rgb, u_sat);
   return acc;
 }
@@ -231,6 +265,9 @@ void main() {
     vec3 rgb = s.rgb;
     if (u_tint.a > 0.001) {
       rgb = mix(rgb, u_tint.rgb, u_tint.a);
+    }
+    if (hasFrost) {
+      rgb = clamp(rgb + ignDither(gl_FragCoord.xy) / 255.0, 0.0, 1.0);
     }
     gl_FragColor = vec4(rgb, outerAlpha * s.a);
     return;
@@ -297,6 +334,9 @@ void main() {
 
   if (u_tint.a > 0.001) {
     rgb = mix(rgb, u_tint.rgb, u_tint.a);
+  }
+  if (hasFrost) {
+    rgb = clamp(rgb + ignDither(gl_FragCoord.xy) / 255.0, 0.0, 1.0);
   }
 
   gl_FragColor = vec4(rgb, outerAlpha * sA);
@@ -420,6 +460,8 @@ function initGlState(): GlState | null {
     uBlur3: gl.getUniformLocation(program, 'u_blur3'),
     uBlur4: gl.getUniformLocation(program, 'u_blur4'),
     uBlur5: gl.getUniformLocation(program, 'u_blur5'),
+    uBlurSizes: gl.getUniformLocation(program, 'u_blurSizes[0]'),
+    blurSizesBuf: new Float32Array(WEBGL_PYRAMID_LEVELS * 2),
     uSize: gl.getUniformLocation(program, 'u_size'),
     uHalfSize: gl.getUniformLocation(program, 'u_halfSize'),
     uBoxHalf: gl.getUniformLocation(program, 'u_boxHalf'),
@@ -630,10 +672,10 @@ export function renderRefractedBevelWebGL(
   gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
   for (let i = 0; i < WEBGL_PYRAMID_LEVELS; i++) {
     gl.activeTexture(gl.TEXTURE1 + i)
-    gl.bindTexture(
-      gl.TEXTURE_2D,
-      hasBlurPyramid && texEntry.blurLevels ? texEntry.blurLevels[i].tex : texEntry.tex,
-    )
+    const level = hasBlurPyramid && texEntry.blurLevels ? texEntry.blurLevels[i] : null
+    gl.bindTexture(gl.TEXTURE_2D, level ? level.tex : texEntry.tex)
+    state.blurSizesBuf[i * 2] = level && level.width > 0 ? level.width : snapshot.width
+    state.blurSizesBuf[i * 2 + 1] = level && level.height > 0 ? level.height : snapshot.height
   }
   gl.activeTexture(gl.TEXTURE0)
 
@@ -650,6 +692,7 @@ export function renderRefractedBevelWebGL(
   gl.uniform1i(state.uBlur3, 3)
   gl.uniform1i(state.uBlur4, 4)
   gl.uniform1i(state.uBlur5, 5)
+  gl.uniform2fv(state.uBlurSizes, state.blurSizesBuf)
   gl.uniform2f(state.uSize, field.width, field.height)
   gl.uniform2f(state.uHalfSize, field.hw, field.hh)
   gl.uniform2f(state.uBoxHalf, field.bx, field.by)
