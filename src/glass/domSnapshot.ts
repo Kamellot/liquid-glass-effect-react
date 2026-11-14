@@ -365,8 +365,10 @@ function drawGradientInto(
   w: number,
   h: number,
 ): void {
-  if (expr.startsWith('linear-gradient(')) {
-    const inner = expr.slice('linear-gradient('.length, -1)
+  const isRepeatingLinear = expr.startsWith('repeating-linear-gradient(')
+  if (expr.startsWith('linear-gradient(') || isRepeatingLinear) {
+    const prefix = isRepeatingLinear ? 'repeating-linear-gradient(' : 'linear-gradient('
+    const inner = expr.slice(prefix.length, -1)
     const args = splitTopLevel(inner, ',')
     if (!args.length) return
     const parsedAngle = parseLinearAngle(args[0], w, h)
@@ -381,7 +383,25 @@ function drawGradientInto(
     const cy = h * 0.5
 
     const grad = ctx.createLinearGradient(cx - dx * halfLen, cy - dy * halfLen, cx + dx * halfLen, cy + dy * halfLen)
-    const stops = parseStops(stopStrings, halfLen * 2)
+    const rawStops = parseStops(stopStrings, halfLen * 2)
+    let stops = rawStops
+    if (isRepeatingLinear && rawStops.length >= 2) {
+      const startOff = rawStops[0].offset
+      const period = rawStops[rawStops.length - 1].offset - startOff
+      if (period > 0.002 && period < 0.99) {
+        const tiled: { color: string; offset: number }[] = []
+        const reps = Math.min(128, Math.ceil((1 - startOff) / period))
+        for (let r = 0; r < reps; r++) {
+          const shift = r * period
+          for (const s of rawStops) {
+            const off = Math.min(1, s.offset + shift)
+            tiled.push({ color: s.color, offset: off })
+            if (off >= 1) break
+          }
+        }
+        stops = tiled
+      }
+    }
     for (const s of stops) {
       try {
         grad.addColorStop(s.offset, s.color)
@@ -511,7 +531,11 @@ function paintBackgroundLayers(
       continue
     }
 
-    if (layer.startsWith('linear-gradient(') || layer.startsWith('radial-gradient(')) {
+    if (
+      layer.startsWith('linear-gradient(') ||
+      layer.startsWith('repeating-linear-gradient(') ||
+      layer.startsWith('radial-gradient(')
+    ) {
       const [tw, th] = computeTileSize(sizeSpec, w, h)
       const [px, py] = parseBgPos(posSpec, w, h, tw, th)
       if (isNoRepeat(repeatSpec) || (Math.abs(tw - w) < 0.5 && Math.abs(th - h) < 0.5 && Math.abs(px) < 0.5 && Math.abs(py) < 0.5)) {

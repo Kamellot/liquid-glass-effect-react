@@ -138,10 +138,6 @@ void main() {
   float outerAlpha = sd <= 0.0 ? 1.0 : 1.0 - sd / 0.75;
   float distInward = sd < 0.0 ? -sd : 0.0;
   if (!hasRefract || distInward >= u_effectiveDepth) {
-    if (!hasFrost) {
-      gl_FragColor = vec4(0.0);
-      return;
-    }
     vec4 s = sampleFrostedSnap(fragCss);
     vec3 rgb = s.rgb;
     if (u_tint.a > 0.001) {
