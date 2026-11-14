@@ -1,9 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { LiquidGlass, type LiquidGlassProps } from '../glass'
-
-function clamp(v: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, v))
-}
+import { clamp } from './utils'
 
 interface LiquidSwitchProps {
   checked: boolean
@@ -15,8 +12,7 @@ interface LiquidSwitchProps {
 }
 
 /**
- * Apple iOS 26/27 Liquid Glass switch: slim recessed track with a protruding
- * refractive crystal capsule thumb supporting both tap-to-toggle and pointer scrubbing.
+ * Recessed optical pill switch with a protruding crystal capsule thumb supporting tap and scrub.
  */
 export function LiquidSwitch({
   checked,
@@ -151,8 +147,8 @@ interface LiquidSegmentedControlProps<T extends string> {
 }
 
 /**
- * Apple Liquid Glass segmented control: continuous dark pill track with a single lifted,
- * overhanging refractive lens capsule that glides or scrubs smoothly across segments.
+ * Optical segmented control: continuous dark pill track with a single lifted refractive lens capsule
+ * that glides or scrubs smoothly across segments.
  */
 export function LiquidSegmentedControl<T extends string>({
   options,

@@ -1,14 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { createElement, createRef } from 'react'
+import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import {
+  buildBevelHash,
+  clamp,
+  clamp01,
   configureLiquidGlass,
+  DEFAULT_GLASS_CONFIG,
   DEFAULTS,
+  degToRad,
+  isTransparentColor,
   LiquidGlass,
   LiquidGlassProvider,
+  OPTICAL_MATERIAL_DEFAULTS,
+  parseCssColorRgba,
   resetLiquidGlassConfig,
-} from '../src/glass'
+} from '../src/index'
 
 test('LiquidGlass works standalone without LiquidGlassProvider (opt-in)', () => {
   const html = renderToStaticMarkup(createElement(LiquidGlass))
@@ -171,4 +179,53 @@ test('configureLiquidGlass applies global defaults without any provider wrapper 
   } finally {
     resetLiquidGlassConfig()
   }
+})
+
+test('LiquidGlass forwards ref, standard HTMLAttributes, and renders deterministically in SSR', () => {
+  const ref = createRef<HTMLDivElement>()
+  const html = renderToString(
+    createElement(
+      LiquidGlass,
+      {
+        ref,
+        mode: 'wrapper',
+        id: 'hero-lens',
+        className: 'custom-lens',
+        role: 'region',
+        'aria-label': 'Interactive lens',
+        'data-testid': 'glass-node',
+        onClick: () => {},
+        fill: true,
+      },
+      createElement('span', null, 'Lens Body'),
+    ),
+  )
+
+  assert.equal(LiquidGlass.displayName, 'LiquidGlass')
+  assert.equal(ref.current, null)
+  assert.strictEqual(DEFAULTS, DEFAULT_GLASS_CONFIG)
+  assert.match(html, /id="hero-lens"/)
+  assert.match(html, /class="lg-root lg-root--wrapper custom-lens"/)
+  assert.match(html, /role="region"/)
+  assert.match(html, /aria-label="Interactive lens"/)
+  assert.match(html, /data-testid="glass-node"/)
+  assert.match(html, /data-lg-engine="css-optics"/)
+  assert.match(html, /class="lg-fill"/)
+  assert.match(html, /Lens Body/)
+  assert.ok(OPTICAL_MATERIAL_DEFAULTS.shadow.includes('-1.25px'))
+})
+
+test('Shared pure optical utils and bevel hashing behave deterministically', () => {
+  assert.equal(clamp(150, 0, 100), 100)
+  assert.equal(clamp(-5, 0, 100), 0)
+  assert.equal(clamp01(0.42), 0.42)
+  assert.ok(Math.abs(degToRad(180) - Math.PI) < 1e-12)
+  assert.deepEqual(parseCssColorRgba('rgba(255, 0, 51, 0.5)'), [1, 0, 51 / 255, 0.5])
+  assert.equal(isTransparentColor('transparent'), true)
+  assert.equal(isTransparentColor('rgba(0, 0, 0, 0)'), true)
+  assert.equal(isTransparentColor('rgb(255, 255, 255)'), false)
+  assert.equal(
+    buildBevelHash({ width: 120, height: 60, borderRadius: 24, depth: 20, splay: 35, scale: 1 }),
+    '120x60_r24.0_d20.0_s35.0_sc1.00',
+  )
 })

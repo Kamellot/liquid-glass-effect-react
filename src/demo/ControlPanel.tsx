@@ -23,33 +23,25 @@ function SliderRow({
   const id = useId()
   const pct = ((value - def.min) / (def.max - def.min)) * 100
   return (
-      <div
-        className={'cp-row' + (disabled ? ' cp-row--dim' : '')}
-      >
-        <label htmlFor={id}>{def.label}</label>
-        <input
-          id={id}
-          type="range"
-          min={def.min}
-          max={def.max}
-          step={def.step}
-          value={value}
-          disabled={disabled}
-          style={{ '--pct': `${pct}%` } as React.CSSProperties}
-          onChange={(e) => onChange(parseFloat(e.target.value))}
-        />
-        <output htmlFor={id}>{value.toFixed(def.decimals)}</output>
-      </div>
-      )
+    <div className={'cp-row' + (disabled ? ' cp-row--dim' : '')}>
+      <label htmlFor={id}>{def.label}</label>
+      <input
+        id={id}
+        type="range"
+        min={def.min}
+        max={def.max}
+        step={def.step}
+        value={value}
+        disabled={disabled}
+        style={{ '--pct': `${pct}%` } as React.CSSProperties}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+      />
+      <output htmlFor={id}>{value.toFixed(def.decimals)}</output>
+    </div>
+  )
 }
 
-      export function ControlPanel({
-        params,
-        onChange,
-        stats,
-        open,
-        onToggle,
-}: Props) {
+export function ControlPanel({ params, onChange, stats, open, onToggle }: Props) {
   const setParam = useCallback(
     (key: SliderDef['key']) => (val: number) => onChange({ [key]: val }),
     [onChange],

@@ -1,22 +1,46 @@
 {
   "name": "liquid-glass-react",
-  "private": true,
   "version": "0.1.0",
+  "description": "SSR-safe Liquid Glass React UI primitive powered by a 1/4-quadrant SDF WebGL/Canvas refraction engine and pure CSS optics.",
   "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "main": "./dist/lib/index.js",
+  "module": "./dist/lib/index.js",
+  "types": "./dist/lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib/index.d.ts",
+      "import": "./dist/lib/index.js"
+    },
+    "./perf-monitor": {
+      "types": "./dist/lib/perf-monitor/index.d.ts",
+      "import": "./dist/lib/perf-monitor.js"
+    },
+    "./styles.css": "./dist/lib/styles.css"
+  },
+  "files": [
+    "dist/lib",
+    "README.md"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "preview": "vite preview",
     "test": "esbuild tests/perf-monitor.test.ts tests/liquid-glass-config.test.ts --bundle --platform=node --format=cjs --loader:.css=empty --external:react --external:react-dom --external:react-dom/server --outdir=dist/.test --out-extension:.js=.cjs && node --test dist/.test/*.cjs"
   },
-  "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.6.0",
     "vite": "^7.0.0"
   }

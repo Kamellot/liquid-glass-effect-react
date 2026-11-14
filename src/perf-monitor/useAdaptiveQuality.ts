@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AdaptiveQualityController } from './AdaptiveQualityController'
 import { perfMonitor } from './PerfEngine'
 import type {
@@ -9,10 +9,6 @@ import type {
   UseAdaptiveQualityResult,
 } from './types'
 
-/**
- * React hook wrapping AdaptiveQualityController with SSR-safe external store
- * synchronization and automatic telemetry lifecycle management.
- */
 export function useAdaptiveQuality(
   options: AdaptiveQualityOptions = {},
 ): UseAdaptiveQualityResult {
@@ -33,20 +29,13 @@ export function useAdaptiveQuality(
   } = options
 
   const targetEngine = engine ?? perfMonitor
+  const initialOptionsRef = useRef(options)
+  initialOptionsRef.current = options
 
-  const [controllerEntry, setControllerEntry] = useState(() => ({
-    engine: targetEngine,
-    controller: new AdaptiveQualityController(options),
-  }))
-
-  if (controllerEntry.engine !== targetEngine) {
-    setControllerEntry({
-      engine: targetEngine,
-      controller: new AdaptiveQualityController(options),
-    })
-  }
-
-  const { controller } = controllerEntry
+  const controller = useMemo(
+    () => new AdaptiveQualityController({ ...initialOptionsRef.current, engine: targetEngine }),
+    [targetEngine],
+  )
 
   useEffect(() => {
     controller.updateOptions({
@@ -86,23 +75,19 @@ export function useAdaptiveQuality(
     (onStoreChange: () => void) => controller.subscribe(onStoreChange),
     [controller],
   )
-  const getSnapshot = useCallback(() => controller.getSnapshot(), [controller])
-  const getServerSnapshot = useCallback(
-    () => controller.getServerSnapshot(),
-    [controller],
-  )
 
-  const state = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+  const state = useSyncExternalStore(
+    subscribe,
+    () => controller.getSnapshot(),
+    () => controller.getServerSnapshot(),
+  )
 
   const setManualTier = useCallback(
     (tier: QualityTier | null) => controller.setManualTier(tier),
     [controller],
   )
 
-  const resetToAuto = useCallback(
-    () => controller.resetToAuto(),
-    [controller],
-  )
+  const resetToAuto = useCallback(() => controller.resetToAuto(), [controller])
 
   return {
     ...state,
@@ -111,14 +96,11 @@ export function useAdaptiveQuality(
   }
 }
 
-/**
- * Lightweight React hook subscribing directly to a PerfEngine telemetry snapshot.
- */
 export function usePerfMetrics(
   engine: PerfEngineLike = perfMonitor,
   enabled = true,
 ): PerfSnapshot {
-  const [serverSnapshot] = useState(() => engine.getSnapshot())
+  const [fallbackServerSnapshot] = useState(() => engine.getServerSnapshot?.() ?? engine.getSnapshot())
 
   useEffect(() => {
     if (!enabled) return undefined
@@ -129,8 +111,10 @@ export function usePerfMetrics(
     (onStoreChange: () => void) => engine.subscribe(onStoreChange),
     [engine],
   )
-  const getSnapshot = useCallback(() => engine.getSnapshot(), [engine])
-  const getServerSnapshot = useCallback(() => serverSnapshot, [serverSnapshot])
 
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+  return useSyncExternalStore(
+    subscribe,
+    () => engine.getSnapshot(),
+    () => engine.getServerSnapshot?.() ?? fallbackServerSnapshot,
+  )
 }

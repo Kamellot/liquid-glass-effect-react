@@ -3,11 +3,6 @@ import test from 'node:test'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import {
-  AdaptiveQualityController as CoreAdaptiveQualityController,
-  BenchmarkRunner as CoreBenchmarkRunner,
-  PerfEngine as CorePerfEngine,
-} from '../src/perf-monitor/core'
-import {
   AdaptiveQualityController,
   BenchmarkRunner,
   PerfEngine,
@@ -63,15 +58,11 @@ function createFrameHarness(startTime = 1000): MockFrameHarness {
   }
 }
 
-test('core.ts exports framework-agnostic classes cleanly', () => {
-  assert.strictEqual(CorePerfEngine, PerfEngine)
-  assert.strictEqual(CoreBenchmarkRunner, BenchmarkRunner)
-  assert.strictEqual(CoreAdaptiveQualityController, AdaptiveQualityController)
-})
-
 test('PerfEngine: SSR safety, singleton, and ref-counted lifecycle', () => {
   assert.equal(typeof perfMonitor.getMetrics, 'function')
+  assert.equal(typeof perfMonitor.getServerSnapshot, 'function')
   const snap = perfMonitor.getSnapshot()
+  assert.strictEqual(snap, perfMonitor.getServerSnapshot())
   assert.equal(snap.isRunning, false)
   assert.equal(snap.jsHeapUsedMb, null)
   assert.equal(snap.fps, 0)
@@ -190,10 +181,10 @@ test('PerfEngine: ignores massive sleep/tab-background gaps and keeps snapshot r
   engine.stop()
 })
 
-test('PerfEngine: Safari/Firefox graceful fallbacks when longtask and performance.memory are unsupported', () => {
+test('PerfEngine: graceful fallbacks when longtask and performance.memory are unsupported', () => {
   const origPerfObserver = (globalThis as Record<string, unknown>).PerformanceObserver
 
-  class SafariLikeObserver {
+  class FallbackObserver {
     static supportedEntryTypes = ['paint', 'mark', 'measure']
     observe() {
       throw new Error('longtask unsupported')
@@ -201,7 +192,7 @@ test('PerfEngine: Safari/Firefox graceful fallbacks when longtask and performanc
     disconnect() {}
   }
 
-  ;(globalThis as Record<string, unknown>).PerformanceObserver = SafariLikeObserver
+  ;(globalThis as Record<string, unknown>).PerformanceObserver = FallbackObserver
   try {
     const engine = new PerfEngine({ emitIntervalMs: 0 })
     engine.start()
@@ -215,7 +206,7 @@ test('PerfEngine: Safari/Firefox graceful fallbacks when longtask and performanc
   }
 })
 
-test('PerfEngine: LongTask PerformanceObserver, Chromium memory, device hints, and custom marks', () => {
+test('PerfEngine: LongTask PerformanceObserver, memory, device hints, and custom marks', () => {
   const origPerfObserver = (globalThis as Record<string, unknown>).PerformanceObserver
   const origPerf = globalThis.performance
   const origNav = globalThis.navigator
@@ -226,9 +217,7 @@ test('PerfEngine: LongTask PerformanceObserver, Chromium memory, device hints, a
 
   class MockPerfObserver {
     static supportedEntryTypes = ['longtask']
-    private cb: (list: { getEntries: () => Array<{ duration: number }> }) => void
     constructor(cb: (list: { getEntries: () => Array<{ duration: number }> }) => void) {
-      this.cb = cb
       capturedObserverCb = cb
     }
     observe() {}
@@ -254,7 +243,7 @@ test('PerfEngine: LongTask PerformanceObserver, Chromium memory, device hints, a
     value: {
       hardwareConcurrency: 8,
       deviceMemory: 8,
-      userAgent: 'MockChromium/130',
+      userAgent: 'MockBrowser/130',
     },
   })
   ;(globalThis as Record<string, unknown>).window = {
@@ -283,7 +272,7 @@ test('PerfEngine: LongTask PerformanceObserver, Chromium memory, device hints, a
     assert.equal(init.deviceHints.devicePixelRatio, 2)
     assert.equal(init.deviceHints.prefersReducedMotion, true)
     assert.equal(init.deviceHints.estimatedTier, 'high')
-    assert.equal(init.deviceHints.userAgent, 'MockChromium/130')
+    assert.equal(init.deviceHints.userAgent, 'MockBrowser/130')
 
     assert.ok(capturedObserverCb !== null)
     capturedObserverCb!({

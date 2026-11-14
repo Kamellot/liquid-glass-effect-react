@@ -8,6 +8,15 @@ export {
   type LiquidGlassProviderProps,
 } from './LiquidGlassContext'
 export {
+  DEFAULT_GLASS_CONFIG,
+  DEFAULT_LENS_SIZE,
+  DEFAULTS,
+  MAX_ASSET_CACHE,
+  MAX_BITMAP_CACHE,
+  OPTICAL_MATERIAL_DEFAULTS,
+  REDUCED_MOTION_DISPLACEMENT_SCALE,
+} from './constants'
+export {
   getTargetSnapshot,
   subscribeTargetSnapshot,
   type TargetSnapshot,
@@ -27,14 +36,18 @@ export {
   type DisplacementMapSpec,
   type EngineStats,
 } from './refractionEngine'
-export {
-  DEFAULT_LENS_SIZE,
-  DEFAULTS,
-  FIGMA_MATERIAL_DEFAULTS,
-  type DisplacementMapInfo,
-  type LiquidGlassGlobalConfig,
-  type LiquidGlassLightMode,
-  type LiquidGlassMode,
-  type LiquidGlassOptions,
-  type LiquidGlassProps,
+export type {
+  DisplacementMapInfo,
+  LiquidGlassGlobalConfig,
+  LiquidGlassLightMode,
+  LiquidGlassMode,
+  LiquidGlassOptions,
+  LiquidGlassProps,
 } from './types'
+export {
+  clamp,
+  clamp01,
+  degToRad,
+  isTransparentColor,
+  parseCssColorRgba,
+} from './utils'

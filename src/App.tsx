@@ -54,8 +54,8 @@ export default function App() {
         <footer className="foot">
           <p>
             Universal cross-browser architecture: <code>domSnapshot.ts</code> + <code>refractionEngine.ts</code> sample a
-            1/4-quadrant symmetric SDF bevel field directly on <code>&lt;canvas&gt;</code> (working identically on Chrome iOS,
-            Safari, Firefox, and Desktop), while frost, the 1px directional specular rim, and inner reflection run in GPU-composited CSS.
+            1/4-quadrant symmetric SDF bevel field directly on <code>&lt;canvas&gt;</code> cleanly across desktop and
+            mobile browsers, while frost, the 1px directional specular rim, and inner reflection run in GPU-composited CSS.
           </p>
         </footer>
       </div>

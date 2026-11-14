@@ -3,7 +3,7 @@ export type DeviceTierHint = 'low' | 'mid' | 'high'
 export interface DeviceHints {
   /** Logical CPU cores reported by navigator.hardwareConcurrency, or null if unavailable. */
   hardwareConcurrency: number | null
-  /** Approximate device RAM in GB (Chromium only; null on Safari/Firefox/SSR). */
+  /** Approximate device RAM in GB when exposed by navigator.deviceMemory; null in SSR or unsupported browsers. */
   deviceMemoryGb: number | null
   /** Whether the user/OS prefers reduced motion. */
   prefersReducedMotion: boolean
@@ -16,11 +16,11 @@ export interface DeviceHints {
 }
 
 export interface MemoryMetrics {
-  /** Current used JS heap size in MB (Chromium only; null on Safari/Firefox/SSR). */
+  /** Current used JS heap size in MB when Performance.memory is exposed; null in SSR or unsupported browsers. */
   usedJSHeapSizeMb: number | null
-  /** Total allocated JS heap size in MB (Chromium only; null elsewhere). */
+  /** Total allocated JS heap size in MB when exposed; null elsewhere. */
   totalJSHeapSizeMb: number | null
-  /** JS heap size limit in MB (Chromium only; null elsewhere). */
+  /** JS heap size limit in MB when exposed; null elsewhere. */
   jsHeapSizeLimitMb: number | null
 }
 
@@ -76,7 +76,7 @@ export interface PerfSnapshot {
   maxLongTaskMs: number
   /** Whether PerformanceObserver('longtask') is supported in this environment. */
   longTaskSupported: boolean
-  /** Current used JS heap size in MB (Chromium only; null on Safari/Firefox/SSR). */
+  /** Current used JS heap size in MB when Performance.memory is exposed; null in SSR or unsupported browsers. */
   jsHeapUsedMb: number | null
   /** Detailed JS heap memory snapshot. */
   memory: MemoryMetrics
@@ -142,6 +142,7 @@ export interface PerfEngineLike {
   flush(): PerfSnapshot
   isRunning(): boolean
   getSnapshot(): PerfSnapshot
+  getServerSnapshot?(): PerfSnapshot
   getMetrics(): PerfSnapshot
   subscribe(listener: () => void): () => void
   onEvent(listener: (event: PerfEvent) => void): () => void

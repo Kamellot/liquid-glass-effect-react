@@ -1,3 +1,16 @@
+import {
+  MAX_ASSET_CACHE,
+  MAX_SNAP_DIM,
+  MAX_SORTED_CONSUMERS,
+  MAX_VIDEO_SNAP_DIM,
+  MIN_VIDEO_CAPTURE_INTERVAL_MS,
+  OVERLAP_MARGIN_PX,
+  SCOPE_RECT_CACHE_TTL_MS,
+  SNAPSHOT_ROOT_MARGIN,
+} from './constants'
+import { clamp, degToRad, isTransparentColor, nowMs, parseCornerRadii, parseLengthPx } from './utils'
+import { releaseWebGLSnapshot } from './webglRefraction'
+
 export interface TargetSnapshot {
   readonly data: Uint8ClampedArray
   canvas: HTMLCanvasElement
@@ -49,13 +62,16 @@ interface SnapshotEntry {
   onMedia: () => void
   onVisibilityChange: () => void
   rafId: number
-  fontsHooked: boolean
 }
 
-const MAX_SNAP_DIM = 2200
-const MAX_VIDEO_SNAP_DIM = 960
-const MIN_VIDEO_CAPTURE_INTERVAL_MS = 32
-const OVERLAP_MARGIN = 64
+const POSITION_KEYWORDS: Record<string, string> = {
+  left: '0%',
+  center: '50%',
+  right: '100%',
+  top: '0%',
+  bottom: '100%',
+}
+
 const assetCache = new Map<string, AssetEntry>()
 const snapshotRegistry = new Map<HTMLElement, SnapshotEntry>()
 const statsListeners = new Set<() => void>()
@@ -66,28 +82,13 @@ export function getSnapshotCount(): number {
 
 export function subscribeSnapshotStats(listener: () => void): () => void {
   statsListeners.add(listener)
-  return () => statsListeners.delete(listener)
+  return () => {
+    statsListeners.delete(listener)
+  }
 }
 
 function notifySnapshotStats(): void {
   for (const listener of statsListeners) listener()
-}
-
-export function isTransparent(color: string): boolean {
-  if (!color || color === 'transparent') return true
-  const m = /^rgba?\(([^)]+)\)$/i.exec(color.trim())
-  if (!m) return false
-  const body = m[1]
-  if (body.includes('/')) {
-    const alpha = parseFloat(body.split('/')[1])
-    return Number.isFinite(alpha) && alpha <= 0.001
-  }
-  const parts = body.split(',')
-  if (parts.length === 4) {
-    const alpha = parseFloat(parts[3])
-    return Number.isFinite(alpha) && alpha <= 0.001
-  }
-  return false
 }
 
 function splitTopLevel(input: string, delimiter: string): string[] {
@@ -151,28 +152,44 @@ function tokenizeTopLevelSpaces(input: string): string[] {
   return out
 }
 
+function evictOldestAssetIfFull(): void {
+  if (assetCache.size < MAX_ASSET_CACHE) return
+  const oldestKey = assetCache.keys().next().value
+  if (oldestKey === undefined) return
+  const evicted = assetCache.get(oldestKey)
+  if (evicted) {
+    evicted.img.onload = null
+    evicted.img.onerror = null
+    evicted.waiters.clear()
+  }
+  assetCache.delete(oldestKey)
+}
+
 function loadAsset(url: string, onReady: () => void): HTMLImageElement | null {
   const cached = assetCache.get(url)
   if (cached) {
+    assetCache.delete(url)
+    assetCache.set(url, cached)
     if (cached.status === 'ready') return cached.img
     if (cached.status === 'loading') cached.waiters.add(onReady)
     return null
   }
 
   const img = new Image()
-  const isDataOrBlob = url.startsWith('data:') || url.startsWith('blob:')
-  if (!isDataOrBlob && typeof window !== 'undefined') {
+  const isInline = url.startsWith('data:') || url.startsWith('blob:')
+  if (!isInline && typeof window !== 'undefined') {
     try {
       const resolved = new URL(url, window.location.href)
       if (resolved.origin !== window.location.origin) {
         img.crossOrigin = 'anonymous'
       }
     } catch {
-      // ignore malformed URL
+      // Malformed URL falls back to default same-origin fetch behavior.
     }
   }
 
   const entry: AssetEntry = { status: 'loading', img, waiters: new Set([onReady]) }
+  evictOldestAssetIfFull()
   assetCache.set(url, entry)
 
   const finish = (ok: boolean) => {
@@ -194,23 +211,6 @@ function loadAsset(url: string, onReady: () => void): HTMLImageElement | null {
     return img
   }
   return null
-}
-
-function parseLength(raw: string, refSize: number): number {
-  const trimmed = raw.trim()
-  const val = parseFloat(trimmed)
-  if (!Number.isFinite(val)) return 0
-  if (trimmed.endsWith('%')) return (val / 100) * refSize
-  return val
-}
-
-function parseCornerRadii(cs: CSSStyleDeclaration, w: number, h: number): [number, number, number, number] {
-  const ref = Math.min(w, h)
-  const rTL = Math.min(ref * 0.5, Math.max(0, parseLength(cs.borderTopLeftRadius.split(/\s+/)[0] || '0', w)))
-  const rTR = Math.min(ref * 0.5, Math.max(0, parseLength(cs.borderTopRightRadius.split(/\s+/)[0] || '0', w)))
-  const rBR = Math.min(ref * 0.5, Math.max(0, parseLength(cs.borderBottomRightRadius.split(/\s+/)[0] || '0', w)))
-  const rBL = Math.min(ref * 0.5, Math.max(0, parseLength(cs.borderBottomLeftRadius.split(/\s+/)[0] || '0', w)))
-  return [rTL, rTR, rBR, rBL]
 }
 
 function traceRoundedRect(
@@ -239,6 +239,25 @@ function traceRoundedRect(
   ctx.closePath()
 }
 
+function withRoundedClip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radii: [number, number, number, number],
+  hasRadius: boolean,
+  draw: () => void,
+): void {
+  ctx.save()
+  if (hasRadius) {
+    traceRoundedRect(ctx, x, y, w, h, radii)
+    ctx.clip()
+  }
+  draw()
+  ctx.restore()
+}
+
 interface ParsedStop {
   color: string
   offset: number | null
@@ -259,7 +278,7 @@ function parseStops(rawStops: string[], axisLen: number): { color: string; offse
       const val = parseFloat(t)
       if (!Number.isFinite(val)) continue
       const off = t.endsWith('%') ? val / 100 : axisLen > 0 ? val / axisLen : 0
-      list.push({ color, offset: Math.max(0, Math.min(1, off)) })
+      list.push({ color, offset: clamp(off, 0, 1) })
     }
   }
   if (!list.length) return []
@@ -268,11 +287,10 @@ function parseStops(rawStops: string[], axisLen: number): { color: string; offse
   if (list[list.length - 1].offset === null) list[list.length - 1].offset = 1
 
   let prevVal = 0
-  for (let i = 0; i < list.length; i++) {
-    if (list[i].offset !== null) {
-      const clamped = Math.max(prevVal, list[i].offset as number)
-      list[i].offset = clamped
-      prevVal = clamped
+  for (const stop of list) {
+    if (stop.offset !== null) {
+      stop.offset = Math.max(prevVal, stop.offset)
+      prevVal = stop.offset
     }
   }
 
@@ -301,23 +319,12 @@ function parseLinearAngle(dir: string, w: number, h: number): number | null {
   if (lower.endsWith('deg')) return parseFloat(lower)
   if (lower.endsWith('turn')) return parseFloat(lower) * 360
   if (lower.endsWith('rad')) return (parseFloat(lower) * 180) / Math.PI
-  if (lower.startsWith('to ')) {
-    const parts = new Set(lower.slice(3).trim().split(/\s+/))
-    const hasTop = parts.has('top')
-    const hasBottom = parts.has('bottom')
-    const hasLeft = parts.has('left')
-    const hasRight = parts.has('right')
-    let vx = 0
-    let vy = 0
-    if (hasRight) vx = w
-    if (hasLeft) vx = -w
-    if (hasTop) vy = -h
-    if (hasBottom) vy = h
-    if (vx !== 0 || vy !== 0) {
-      return (Math.atan2(vx, -vy) * 180) / Math.PI
-    }
-  }
-  return null
+  if (!lower.startsWith('to ')) return null
+
+  const parts = new Set(lower.slice(3).trim().split(/\s+/))
+  const vx = parts.has('right') ? w : parts.has('left') ? -w : 0
+  const vy = parts.has('bottom') ? h : parts.has('top') ? -h : 0
+  return vx !== 0 || vy !== 0 ? (Math.atan2(vx, -vy) * 180) / Math.PI : null
 }
 
 function computeTileSize(rawSize: string, boxW: number, boxH: number, img?: HTMLImageElement): [number, number] {
@@ -338,8 +345,8 @@ function computeTileSize(rawSize: string, boxW: number, boxH: number, img?: HTML
   const rawH = parts[1] ?? 'auto'
   const aspect = img && img.naturalWidth > 0 ? img.naturalHeight / img.naturalWidth : 1
 
-  let tw = rawW === 'auto' ? NaN : parseLength(rawW, boxW)
-  let th = rawH === 'auto' ? NaN : parseLength(rawH, boxH)
+  let tw = rawW === 'auto' ? NaN : parseLengthPx(rawW, boxW)
+  let th = rawH === 'auto' ? NaN : parseLengthPx(rawH, boxH)
   if (Number.isNaN(tw) && Number.isNaN(th)) return [boxW, boxH]
   if (Number.isNaN(tw)) tw = img ? th / aspect : boxW
   if (Number.isNaN(th)) th = img ? tw * aspect : boxH
@@ -348,131 +355,133 @@ function computeTileSize(rawSize: string, boxW: number, boxH: number, img?: HTML
 
 function parseBgPos(rawPos: string, boxW: number, boxH: number, tileW: number, tileH: number): [number, number] {
   const tokens = rawPos.trim().toLowerCase().split(/\s+/)
-  const kw: Record<string, string> = { left: '0%', center: '50%', right: '100%', top: '0%', bottom: '100%' }
-  const pxToken = kw[tokens[0]] ?? tokens[0] ?? '0%'
-  const pyToken = kw[tokens[1]] ?? tokens[1] ?? '0%'
+  const pxToken = POSITION_KEYWORDS[tokens[0]] ?? tokens[0] ?? '0%'
+  const pyToken = POSITION_KEYWORDS[tokens[1]] ?? tokens[1] ?? '0%'
 
-  const resolve = (tok: string, boxDim: number, tileDim: number) => {
-    if (tok.endsWith('%')) return (boxDim - tileDim) * (parseFloat(tok) / 100)
-    return parseFloat(tok) || 0
-  }
+  const resolve = (tok: string, boxDim: number, tileDim: number) =>
+    tok.endsWith('%') ? (boxDim - tileDim) * (parseFloat(tok) / 100) : parseFloat(tok) || 0
   return [resolve(pxToken, boxW, tileW), resolve(pyToken, boxH, tileH)]
 }
 
-function drawGradientInto(
+function addColorStops(grad: CanvasGradient, stops: { color: string; offset: number }[]): void {
+  for (const s of stops) {
+    try {
+      grad.addColorStop(s.offset, s.color)
+    } catch {
+      // Unsupported color tokens are skipped to preserve remaining stops.
+    }
+  }
+}
+
+function drawLinearGradient(
   ctx: CanvasRenderingContext2D,
   expr: string,
   w: number,
   h: number,
+  isRepeating: boolean,
 ): void {
-  const isRepeatingLinear = expr.startsWith('repeating-linear-gradient(')
-  if (expr.startsWith('linear-gradient(') || isRepeatingLinear) {
-    const prefix = isRepeatingLinear ? 'repeating-linear-gradient(' : 'linear-gradient('
-    const inner = expr.slice(prefix.length, -1)
-    const args = splitTopLevel(inner, ',')
-    if (!args.length) return
-    const parsedAngle = parseLinearAngle(args[0], w, h)
-    const angleDeg = parsedAngle !== null ? parsedAngle : 180
-    const stopStrings = parsedAngle !== null ? args.slice(1) : args
+  const prefix = isRepeating ? 'repeating-linear-gradient(' : 'linear-gradient('
+  const args = splitTopLevel(expr.slice(prefix.length, -1), ',')
+  if (!args.length) return
 
-    const rad = (angleDeg * Math.PI) / 180
-    const dx = Math.sin(rad)
-    const dy = -Math.cos(rad)
-    const halfLen = (Math.abs(w * dx) + Math.abs(h * dy)) * 0.5
-    const cx = w * 0.5
-    const cy = h * 0.5
+  const parsedAngle = parseLinearAngle(args[0], w, h)
+  const angleDeg = parsedAngle ?? 180
+  const stopStrings = parsedAngle !== null ? args.slice(1) : args
 
-    const grad = ctx.createLinearGradient(cx - dx * halfLen, cy - dy * halfLen, cx + dx * halfLen, cy + dy * halfLen)
-    const rawStops = parseStops(stopStrings, halfLen * 2)
-    let stops = rawStops
-    if (isRepeatingLinear && rawStops.length >= 2) {
-      const startOff = rawStops[0].offset
-      const period = rawStops[rawStops.length - 1].offset - startOff
-      if (period > 0.002 && period < 0.99) {
-        const tiled: { color: string; offset: number }[] = []
-        const reps = Math.min(128, Math.ceil((1 - startOff) / period))
-        for (let r = 0; r < reps; r++) {
-          const shift = r * period
-          for (const s of rawStops) {
-            const off = Math.min(1, s.offset + shift)
-            tiled.push({ color: s.color, offset: off })
-            if (off >= 1) break
-          }
+  const rad = degToRad(angleDeg)
+  const dx = Math.sin(rad)
+  const dy = -Math.cos(rad)
+  const halfLen = (Math.abs(w * dx) + Math.abs(h * dy)) * 0.5
+  const cx = w * 0.5
+  const cy = h * 0.5
+
+  const grad = ctx.createLinearGradient(cx - dx * halfLen, cy - dy * halfLen, cx + dx * halfLen, cy + dy * halfLen)
+  const rawStops = parseStops(stopStrings, halfLen * 2)
+  let stops = rawStops
+
+  if (isRepeating && rawStops.length >= 2) {
+    const startOff = rawStops[0].offset
+    const period = rawStops[rawStops.length - 1].offset - startOff
+    if (period > 0.002 && period < 0.99) {
+      const tiled: { color: string; offset: number }[] = []
+      const reps = Math.min(128, Math.ceil((1 - startOff) / period))
+      for (let r = 0; r < reps; r++) {
+        const shift = r * period
+        for (const s of rawStops) {
+          const off = Math.min(1, s.offset + shift)
+          tiled.push({ color: s.color, offset: off })
+          if (off >= 1) break
         }
-        stops = tiled
       }
+      stops = tiled
     }
-    for (const s of stops) {
-      try {
-        grad.addColorStop(s.offset, s.color)
-      } catch {
-        // ignore unsupported color tokens
-      }
-    }
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, w, h)
-    return
   }
 
-  if (expr.startsWith('radial-gradient(')) {
-    const inner = expr.slice('radial-gradient('.length, -1)
-    const args = splitTopLevel(inner, ',')
-    if (!args.length) return
+  addColorStops(grad, stops)
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, w, h)
+}
 
-    const first = args[0]
-    const hasSpec =
-      /(?:^|\s)(circle|ellipse|closest-side|closest-corner|farthest-side|farthest-corner|at)(?:\s|$)/i.test(first) ||
-      /^\d/.test(first)
-    const spec = hasSpec ? first : ''
-    const stopStrings = hasSpec ? args.slice(1) : args
+function drawRadialGradient(ctx: CanvasRenderingContext2D, expr: string, w: number, h: number): void {
+  const args = splitTopLevel(expr.slice('radial-gradient('.length, -1), ',')
+  if (!args.length) return
 
-    let cx = w * 0.5
-    let cy = h * 0.5
-    let sizePart = spec
-    const atIdx = spec.toLowerCase().indexOf(' at ')
-    if (atIdx !== -1 || spec.toLowerCase().startsWith('at ')) {
-      const posStr = spec.slice(atIdx === -1 ? 3 : atIdx + 4).trim()
-      sizePart = atIdx === -1 ? '' : spec.slice(0, atIdx).trim()
-      const posTokens = posStr.split(/\s+/)
-      const kw: Record<string, string> = { left: '0%', center: '50%', right: '100%', top: '0%', bottom: '100%' }
-      cx = parseLength(kw[posTokens[0]?.toLowerCase()] ?? posTokens[0] ?? '50%', w)
-      cy = parseLength(kw[posTokens[1]?.toLowerCase()] ?? posTokens[1] ?? '50%', h)
-    }
+  const first = args[0]
+  const hasSpec =
+    /(?:^|\s)(circle|ellipse|closest-side|closest-corner|farthest-side|farthest-corner|at)(?:\s|$)/i.test(first) ||
+    /^\d/.test(first)
+  const spec = hasSpec ? first : ''
+  const stopStrings = hasSpec ? args.slice(1) : args
 
-    let rx = Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy))
-    let ry = rx
-    const sizeTokens = sizePart.replace(/\b(circle|ellipse)\b/gi, '').trim().split(/\s+/).filter(Boolean)
-    if (sizeTokens.length === 2 && !sizeTokens[0].endsWith('side') && !sizeTokens[0].endsWith('corner')) {
-      rx = Math.max(1, parseLength(sizeTokens[0], w))
-      ry = Math.max(1, parseLength(sizeTokens[1], h))
-    } else if (sizeTokens.length === 1 && !sizeTokens[0].endsWith('side') && !sizeTokens[0].endsWith('corner')) {
-      rx = Math.max(1, parseLength(sizeTokens[0], Math.max(w, h)))
-      ry = rx
-    } else if (sizePart.includes('closest-side')) {
-      rx = Math.max(1, Math.min(cx, w - cx))
-      ry = Math.max(1, Math.min(cy, h - cy))
-      if (sizePart.includes('circle')) rx = ry = Math.min(rx, ry)
-    }
+  let cx = w * 0.5
+  let cy = h * 0.5
+  let sizePart = spec
+  const atIdx = spec.toLowerCase().indexOf(' at ')
+  if (atIdx !== -1 || spec.toLowerCase().startsWith('at ')) {
+    const posStr = spec.slice(atIdx === -1 ? 3 : atIdx + 4).trim()
+    sizePart = atIdx === -1 ? '' : spec.slice(0, atIdx).trim()
+    const posTokens = posStr.split(/\s+/)
+    cx = parseLengthPx(POSITION_KEYWORDS[posTokens[0]?.toLowerCase()] ?? posTokens[0] ?? '50%', w)
+    cy = parseLengthPx(POSITION_KEYWORDS[posTokens[1]?.toLowerCase()] ?? posTokens[1] ?? '50%', h)
+  }
 
-    const stops = parseStops(stopStrings, Math.max(rx, ry))
-    if (!stops.length) return
+  let rx = Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy))
+  let ry = rx
+  const sizeTokens = sizePart.replace(/\b(circle|ellipse)\b/gi, '').trim().split(/\s+/).filter(Boolean)
+  if (sizeTokens.length === 2 && !sizeTokens[0].endsWith('side') && !sizeTokens[0].endsWith('corner')) {
+    rx = Math.max(1, parseLengthPx(sizeTokens[0], w))
+    ry = Math.max(1, parseLengthPx(sizeTokens[1], h))
+  } else if (sizeTokens.length === 1 && !sizeTokens[0].endsWith('side') && !sizeTokens[0].endsWith('corner')) {
+    rx = Math.max(1, parseLengthPx(sizeTokens[0], Math.max(w, h)))
+    ry = rx
+  } else if (sizePart.includes('closest-side')) {
+    rx = Math.max(1, Math.min(cx, w - cx))
+    ry = Math.max(1, Math.min(cy, h - cy))
+    if (sizePart.includes('circle')) rx = ry = Math.min(rx, ry)
+  }
 
-    ctx.save()
-    ctx.translate(cx, cy)
-    if (Math.abs(ry - rx) > 0.5) {
-      ctx.scale(1, ry / rx)
-    }
-    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx)
-    for (const s of stops) {
-      try {
-        grad.addColorStop(s.offset, s.color)
-      } catch {
-        // ignore unsupported color tokens
-      }
-    }
-    ctx.fillStyle = grad
-    ctx.fillRect(-cx, -cy * (rx / ry), w, h * (rx / ry))
-    ctx.restore()
+  const stops = parseStops(stopStrings, Math.max(rx, ry))
+  if (!stops.length) return
+
+  ctx.save()
+  ctx.translate(cx, cy)
+  if (Math.abs(ry - rx) > 0.5) {
+    ctx.scale(1, ry / rx)
+  }
+  const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx)
+  addColorStops(grad, stops)
+  ctx.fillStyle = grad
+  ctx.fillRect(-cx, -cy * (rx / ry), w, h * (rx / ry))
+  ctx.restore()
+}
+
+function drawGradientInto(ctx: CanvasRenderingContext2D, expr: string, w: number, h: number): void {
+  if (expr.startsWith('linear-gradient(')) {
+    drawLinearGradient(ctx, expr, w, h, false)
+  } else if (expr.startsWith('repeating-linear-gradient(')) {
+    drawLinearGradient(ctx, expr, w, h, true)
+  } else if (expr.startsWith('radial-gradient(')) {
+    drawRadialGradient(ctx, expr, w, h)
   }
 }
 
@@ -490,7 +499,7 @@ function paintBackgroundLayers(
   snapScale: number,
   onAssetReady: () => void,
 ): void {
-  if (!isTransparent(cs.backgroundColor)) {
+  if (!isTransparentColor(cs.backgroundColor)) {
     ctx.fillStyle = cs.backgroundColor
     ctx.fillRect(x, y, w, h)
   }
@@ -543,29 +552,30 @@ function paintBackgroundLayers(
         ctx.translate(x + px, y + py)
         drawGradientInto(ctx, layer, tw, th)
         ctx.restore()
-      } else {
-        const tile = document.createElement('canvas')
-        tile.width = Math.max(1, Math.round(tw * snapScale))
-        tile.height = Math.max(1, Math.round(th * snapScale))
-        const tCtx = tile.getContext('2d')
-        if (!tCtx) continue
-        tCtx.scale(snapScale, snapScale)
-        drawGradientInto(tCtx, layer, tw, th)
-        const pattern = ctx.createPattern(tile, 'repeat')
-        if (pattern) {
-          ctx.save()
-          ctx.translate(x + px, y + py)
-          if (typeof pattern.setTransform === 'function' && typeof DOMMatrix !== 'undefined') {
-            pattern.setTransform(new DOMMatrix().scale(1 / snapScale))
-            ctx.fillStyle = pattern
-            ctx.fillRect(-px, -py, w, h)
-          } else {
-            ctx.scale(1 / snapScale, 1 / snapScale)
-            ctx.fillStyle = pattern
-            ctx.fillRect(-px * snapScale, -py * snapScale, w * snapScale, h * snapScale)
-          }
-          ctx.restore()
+        continue
+      }
+
+      const tile = document.createElement('canvas')
+      tile.width = Math.max(1, Math.round(tw * snapScale))
+      tile.height = Math.max(1, Math.round(th * snapScale))
+      const tCtx = tile.getContext('2d')
+      if (!tCtx) continue
+      tCtx.scale(snapScale, snapScale)
+      drawGradientInto(tCtx, layer, tw, th)
+      const pattern = ctx.createPattern(tile, 'repeat')
+      if (pattern) {
+        ctx.save()
+        ctx.translate(x + px, y + py)
+        if (typeof pattern.setTransform === 'function' && typeof DOMMatrix !== 'undefined') {
+          pattern.setTransform(new DOMMatrix().scale(1 / snapScale))
+          ctx.fillStyle = pattern
+          ctx.fillRect(-px, -py, w, h)
+        } else {
+          ctx.scale(1 / snapScale, 1 / snapScale)
+          ctx.fillStyle = pattern
+          ctx.fillRect(-px * snapScale, -py * snapScale, w * snapScale, h * snapScale)
         }
+        ctx.restore()
       }
     }
   }
@@ -584,7 +594,7 @@ function parseTextShadow(raw: string): { color: string; x: number; y: number; bl
       color = t
     }
   }
-  if (nums.length < 2 || isTransparent(color)) return null
+  if (nums.length < 2 || isTransparentColor(color)) return null
   return { color, x: nums[0], y: nums[1], blur: nums[2] ?? 0 }
 }
 
@@ -609,8 +619,7 @@ function renderTextNode(
   const range = document.createRange()
   range.setStart(node, trimmedMatch.index)
   range.setEnd(node, trimmedMatch.index + trimmedMatch[0].length)
-  const rects = range.getClientRects()
-  if (!rects.length) return
+  if (!range.getClientRects().length) return
 
   ctx.save()
   ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
@@ -622,7 +631,6 @@ function renderTextNode(
       cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing
   }
 
-  // Match DOM inline baseline via font metrics so large display letters match Canvas2D sub-pixel Y
   const probe = typeof ctx.measureText === 'function' ? ctx.measureText('Mg') : null
   const fontAscent = probe?.fontBoundingBoxAscent
   const fontDescent = probe?.fontBoundingBoxDescent
@@ -636,27 +644,19 @@ function renderTextNode(
   const baselineRatio = hasFontMetrics ? fontAscent / (fontAscent + fontDescent) : 0.52
 
   const shadow = parseTextShadow(cs.textShadow)
-  const words: { start: number; end: number }[] = []
-  const re = /\S+/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw)) !== null) {
-    words.push({ start: m.index, end: m.index + m[0].length })
-  }
-  if (!words.length) {
-    ctx.restore()
-    return
-  }
-
-  // Position every word (and divergent-tracking Latin glyphs) at exact DOM Range coordinates
   const draws: { text: string; x: number; y: number }[] = []
-  for (let wi = 0; wi < words.length; wi++) {
-    const word = words[wi]
-    const rawWord = raw.slice(word.start, word.end)
+  const wordRegex = /\S+/g
+  let match: RegExpExecArray | null
+
+  while ((match = wordRegex.exec(raw)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    const rawWord = raw.slice(start, end)
     const wordText = applyTextTransform(rawWord, cs.textTransform)
     if (!wordText) continue
 
-    range.setStart(node, word.start)
-    range.setEnd(node, word.end)
+    range.setStart(node, start)
+    range.setEnd(node, end)
     const wordRects = range.getClientRects()
     const wordBox = wordRects.length === 1 ? wordRects[0] : range.getBoundingClientRect()
     if (wordBox.width <= 0 || wordBox.height <= 0) continue
@@ -671,8 +671,8 @@ function renderTextNode(
 
     if (canPerGlyph) {
       for (let ci = 0; ci < wordText.length; ci++) {
-        range.setStart(node, word.start + ci)
-        range.setEnd(node, word.start + ci + 1)
+        range.setStart(node, start + ci)
+        range.setEnd(node, start + ci + 1)
         const charBox = range.getBoundingClientRect()
         if (charBox.width <= 0 || charBox.height <= 0) continue
         draws.push({
@@ -690,26 +690,29 @@ function renderTextNode(
     }
   }
 
+  if (!draws.length) {
+    ctx.restore()
+    return
+  }
+
   if (shadow) {
     ctx.shadowColor = shadow.color
     ctx.shadowOffsetX = shadow.x
     ctx.shadowOffsetY = shadow.y
     ctx.shadowBlur = shadow.blur
   }
-  for (let i = 0; i < draws.length; i++) {
-    const d = draws[i]
+  for (const d of draws) {
     ctx.fillText(d.text, d.x, d.y)
   }
 
-  // Re-stamp opaque fills over shadow pass so neighboring tight-kerned glyphs don't darken each other
+  // Re-stamp opaque glyphs without shadow so adjacent tight-kerned letters do not over-darken each other.
   const isOpaqueText = !/rgba\([^,]+,[^,]+,[^,]+,\s*0\.\d+\)|\/\s*0\.\d+\s*\)/i.test(cs.color)
   if (shadow && isOpaqueText && draws.length > 1) {
     ctx.shadowColor = 'transparent'
     ctx.shadowOffsetX = 0
     ctx.shadowOffsetY = 0
     ctx.shadowBlur = 0
-    for (let i = 0; i < draws.length; i++) {
-      const d = draws[i]
+    for (const d of draws) {
       ctx.fillText(d.text, d.x, d.y)
     }
   }
@@ -722,13 +725,79 @@ function orderedChildElements(parent: Element): Element[] {
   if (children.length <= 1) return children
 
   const keyed = children.map((el, index) => {
-    const cs = getComputedStyle(el)
-    const zRaw = cs.zIndex
-    const zNum = zRaw === 'auto' ? 0 : parseInt(zRaw, 10) || 0
-    return { el, z: zNum, index }
+    const zRaw = getComputedStyle(el).zIndex
+    return { el, z: zRaw === 'auto' ? 0 : parseInt(zRaw, 10) || 0, index }
   })
   keyed.sort((a, b) => (a.z !== b.z ? a.z - b.z : a.index - b.index))
   return keyed.map((k) => k.el)
+}
+
+function paintReplacedElement(
+  ctx: CanvasRenderingContext2D,
+  el: Element,
+  cs: CSSStyleDeclaration,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radii: [number, number, number, number],
+  hasRadius: boolean,
+  onAssetReady: () => void,
+  onVideoPlaying?: (video: HTMLVideoElement) => void,
+): boolean {
+  const tag = el.tagName.toUpperCase()
+
+  if (tag === 'IMG') {
+    const src = (el as HTMLImageElement).currentSrc || (el as HTMLImageElement).src
+    const img = src ? loadAsset(src, onAssetReady) : null
+    if (img) {
+      withRoundedClip(ctx, x, y, w, h, radii, hasRadius, () => ctx.drawImage(img, x, y, w, h))
+    }
+    return true
+  }
+
+  if (tag === 'VIDEO') {
+    const video = el as HTMLVideoElement
+    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+      withRoundedClip(ctx, x, y, w, h, radii, hasRadius, () => {
+        if (cs.objectFit === 'cover') {
+          const ir = video.videoWidth / video.videoHeight
+          const br = w / h
+          const dw = ir > br ? h * ir : w
+          const dh = ir > br ? h : w / ir
+          ctx.drawImage(video, x + (w - dw) * 0.5, y + (h - dh) * 0.5, dw, dh)
+        } else {
+          ctx.drawImage(video, x, y, w, h)
+        }
+      })
+      if (!video.paused && !video.ended) {
+        if (onVideoPlaying) onVideoPlaying(video)
+        else onAssetReady()
+      }
+    }
+    return true
+  }
+
+  if (tag === 'CANVAS') {
+    const cvs = el as HTMLCanvasElement
+    if (cvs.width > 0 && cvs.height > 0) {
+      withRoundedClip(ctx, x, y, w, h, radii, hasRadius, () => ctx.drawImage(cvs, x, y, w, h))
+    }
+    return true
+  }
+
+  if (tag === 'SVG') {
+    const clone = el.cloneNode(true) as SVGSVGElement
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    clone.setAttribute('width', String(Math.round(w)))
+    clone.setAttribute('height', String(Math.round(h)))
+    const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`
+    const img = loadAsset(svgUrl, onAssetReady)
+    if (img) ctx.drawImage(img, x, y, w, h)
+    return true
+  }
+
+  return false
 }
 
 function paintElementTree(
@@ -760,25 +829,18 @@ function paintElementTree(
 
   const radii = parseCornerRadii(cs, w, h)
   const hasRadius = radii[0] > 0 || radii[1] > 0 || radii[2] > 0 || radii[3] > 0
-  const clipsChildren = cs.overflow === 'hidden' || cs.overflow === 'clip' || cs.overflowX === 'hidden' || cs.overflowY === 'hidden'
 
   ctx.save()
   if (Number.isFinite(opacity) && opacity < 0.999) {
     ctx.globalAlpha *= opacity
   }
 
-  // Paint element's own background clipped to border radius
-  ctx.save()
-  if (hasRadius) {
-    traceRoundedRect(ctx, x, y, w, h, radii)
-    ctx.clip()
-  }
-  paintBackgroundLayers(ctx, cs, x, y, w, h, snapScale, onAssetReady)
-  ctx.restore()
+  withRoundedClip(ctx, x, y, w, h, radii, hasRadius, () => {
+    paintBackgroundLayers(ctx, cs, x, y, w, h, snapScale, onAssetReady)
+  })
 
-  // Border stroke
   const borderW = parseFloat(cs.borderTopWidth) || 0
-  if (borderW > 0 && cs.borderTopStyle !== 'none' && !isTransparent(cs.borderTopColor)) {
+  if (borderW > 0 && cs.borderTopStyle !== 'none' && !isTransparentColor(cs.borderTopColor)) {
     ctx.save()
     traceRoundedRect(ctx, x + borderW * 0.5, y + borderW * 0.5, Math.max(0, w - borderW), Math.max(0, h - borderW), radii)
     ctx.strokeStyle = cs.borderTopColor
@@ -787,98 +849,18 @@ function paintElementTree(
     ctx.restore()
   }
 
-  // Inline <img>, <video>, <canvas>, or <svg>
-  const tag = el.tagName.toUpperCase()
-  if (tag === 'IMG') {
-    const src = (el as HTMLImageElement).currentSrc || (el as HTMLImageElement).src
-    const img = src ? loadAsset(src, onAssetReady) : null
-    if (img) {
-      ctx.save()
-      if (hasRadius) {
-        traceRoundedRect(ctx, x, y, w, h, radii)
-        ctx.clip()
-      }
-      ctx.drawImage(img, x, y, w, h)
-      ctx.restore()
-    }
+  if (paintReplacedElement(ctx, el, cs, x, y, w, h, radii, hasRadius, onAssetReady, onVideoPlaying)) {
     ctx.restore()
     return
   }
 
-  if (tag === 'VIDEO') {
-    const video = el as HTMLVideoElement
-    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-      ctx.save()
-      if (hasRadius) {
-        traceRoundedRect(ctx, x, y, w, h, radii)
-        ctx.clip()
-      }
-      if (cs.objectFit === 'cover') {
-        const ir = video.videoWidth / video.videoHeight
-        const br = w / h
-        let dw = w
-        let dh = h
-        let dx = x
-        let dy = y
-        if (ir > br) {
-          dw = h * ir
-          dx = x + (w - dw) * 0.5
-        } else {
-          dh = w / ir
-          dy = y + (h - dh) * 0.5
-        }
-        ctx.drawImage(video, dx, dy, dw, dh)
-      } else {
-        ctx.drawImage(video, x, y, w, h)
-      }
-      ctx.restore()
-      if (!video.paused && !video.ended) {
-        if (onVideoPlaying) {
-          onVideoPlaying(video)
-        } else {
-          onAssetReady()
-        }
-      }
-    }
-    ctx.restore()
-    return
-  }
-
-  if (tag === 'CANVAS') {
-    const cvs = el as HTMLCanvasElement
-    if (cvs.width > 0 && cvs.height > 0) {
-      ctx.save()
-      if (hasRadius) {
-        traceRoundedRect(ctx, x, y, w, h, radii)
-        ctx.clip()
-      }
-      ctx.drawImage(cvs, x, y, w, h)
-      ctx.restore()
-    }
-    ctx.restore()
-    return
-  }
-
-  if (tag === 'SVG') {
-    const clone = el.cloneNode(true) as SVGSVGElement
-    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-    clone.setAttribute('width', String(Math.round(w)))
-    clone.setAttribute('height', String(Math.round(h)))
-    const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`
-    const img = loadAsset(svgUrl, onAssetReady)
-    if (img) {
-      ctx.drawImage(img, x, y, w, h)
-    }
-    ctx.restore()
-    return
-  }
-
+  const clipsChildren =
+    cs.overflow === 'hidden' || cs.overflow === 'clip' || cs.overflowX === 'hidden' || cs.overflowY === 'hidden'
   if (clipsChildren) {
     traceRoundedRect(ctx, x, y, w, h, radii)
     ctx.clip()
   }
 
-  // Direct text nodes + stacking-ordered element children
   for (const child of el.childNodes) {
     if (child.nodeType === Node.TEXT_NODE) {
       renderTextNode(ctx, child as Text, cs, targetRect)
@@ -911,8 +893,7 @@ function hasVisibleConsumer(entry: SnapshotEntry): boolean {
 function isTargetActive(entry: SnapshotEntry): boolean {
   if (!entry.isVisible) return false
   if (typeof document !== 'undefined' && document.hidden) return false
-  if (!hasVisibleConsumer(entry)) return false
-  return true
+  return hasVisibleConsumer(entry)
 }
 
 function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void {
@@ -923,28 +904,25 @@ function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void
   }
   const rvfc = (video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number })
     .requestVideoFrameCallback
-  if (typeof rvfc === 'function') {
-    if (entry.videoCallbacks.has(video)) return
-    entry.videoCallbacks.add(video)
-    rvfc.call(video, () => {
-      entry.videoCallbacks.delete(video)
-      if (!snapshotRegistry.has(entry.target)) return
-      if (!isTargetActive(entry)) {
-        entry.deferredWhileHidden = true
-        return
-      }
-      const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-      if (now - entry.lastVideoCaptureAt < MIN_VIDEO_CAPTURE_INTERVAL_MS) {
-        if (!video.paused && !video.ended) {
-          scheduleVideoFrame(entry, video)
-        }
-        return
-      }
-      scheduleSnapshotRefresh(entry)
-    })
-  } else {
+  if (typeof rvfc !== 'function') {
     scheduleSnapshotRefresh(entry)
+    return
   }
+  if (entry.videoCallbacks.has(video)) return
+  entry.videoCallbacks.add(video)
+  rvfc.call(video, () => {
+    entry.videoCallbacks.delete(video)
+    if (!snapshotRegistry.has(entry.target)) return
+    if (!isTargetActive(entry)) {
+      entry.deferredWhileHidden = true
+      return
+    }
+    if (nowMs() - entry.lastVideoCaptureAt < MIN_VIDEO_CAPTURE_INTERVAL_MS) {
+      if (!video.paused && !video.ended) scheduleVideoFrame(entry, video)
+      return
+    }
+    scheduleSnapshotRefresh(entry)
+  })
 }
 
 function createTargetSnapshot(
@@ -1044,7 +1022,7 @@ function rectsOverlap(a: DOMRect, b: DOMRect, margin: number): boolean {
 
 function getScopeRect(rec: ConsumerRecord, now: number): DOMRect | null {
   if (!rec.scopeEl) return null
-  if (rec.cachedRect && now - rec.cachedRectAt < 12) return rec.cachedRect
+  if (rec.cachedRect && now - rec.cachedRectAt < SCOPE_RECT_CACHE_TTL_MS) return rec.cachedRect
   const rect = rec.scopeEl.getBoundingClientRect()
   rec.cachedRect = rect
   rec.cachedRectAt = now
@@ -1053,7 +1031,7 @@ function getScopeRect(rec: ConsumerRecord, now: number): DOMRect | null {
 
 function getOrderedConsumers(entry: SnapshotEntry): ConsumerRecord[] {
   const list = Array.from(entry.consumers.values())
-  if (list.length <= 1 || list.length > 16) return list
+  if (list.length <= 1 || list.length > MAX_SORTED_CONSUMERS) return list
   list.sort((a, b) => {
     if (!a.scopeEl || !b.scopeEl) return 0
     return comparePaintOrder(a.scopeEl, b.scopeEl, entry.target)
@@ -1065,7 +1043,7 @@ function notifyScopesAbove(entry: SnapshotEntry, scopes: Iterable<HTMLElement>):
   const scopeSet = new Set(scopes)
   if (scopeSet.size === 0 || entry.consumers.size <= 1) return
 
-  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const now = nowMs()
   const scopeRects = new Map<HTMLElement, DOMRect>()
   for (const s of scopeSet) {
     scopeRects.set(s, s.getBoundingClientRect())
@@ -1081,7 +1059,7 @@ function notifyScopesAbove(entry: SnapshotEntry, scopes: Iterable<HTMLElement>):
       const scopeRect = scopeRects.get(scopeEl)!
       const overlaps =
         rec.lastOverlappedScopes.has(scopeEl) ||
-        rectsOverlap(scopeRect, recRect, OVERLAP_MARGIN)
+        rectsOverlap(scopeRect, recRect, OVERLAP_MARGIN_PX)
       if (overlaps && comparePaintOrder(scopeEl, rec.scopeEl, entry.target) < 0) {
         toNotify.push(rec)
         break
@@ -1112,9 +1090,8 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
   const maxDim = entry.hasActiveVideo ? MAX_VIDEO_SNAP_DIM : MAX_SNAP_DIM
   const rawDpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, maxScale) : 1
   const capScale = Math.min(rawDpr, maxDim / cssW, maxDim / cssH)
-  const scale = entry.hasActiveVideo
-    ? Math.max(0.5, Math.min(rawDpr, capScale > 0 ? capScale : 1))
-    : Math.max(1, Math.min(rawDpr, capScale > 0 ? capScale : 1))
+  const minScale = entry.hasActiveVideo ? 0.5 : 1
+  const scale = Math.max(minScale, Math.min(rawDpr, capScale > 0 ? capScale : 1))
   const bufW = Math.max(2, Math.round(cssW * scale))
   const bufH = Math.max(2, Math.round(cssH * scale))
 
@@ -1127,11 +1104,17 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
 
   entry.hasActiveVideo = false
-  const schedule = () => scheduleSnapshotRefresh(entry)
-  const onVideoPlaying = (video: HTMLVideoElement) => scheduleVideoFrame(entry, video)
-  paintElementTree(ctx, entry.target, rect, scale, schedule, true, onVideoPlaying)
+  paintElementTree(
+    ctx,
+    entry.target,
+    rect,
+    scale,
+    () => scheduleSnapshotRefresh(entry),
+    true,
+    (video) => scheduleVideoFrame(entry, video),
+  )
   if (entry.hasActiveVideo) {
-    entry.lastVideoCaptureAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    entry.lastVideoCaptureAt = nowMs()
   }
 
   entry.version += 1
@@ -1147,13 +1130,13 @@ function scheduleSnapshotRefresh(entry: SnapshotEntry): void {
     entry.deferredWhileHidden = true
     return
   }
-  if (entry.rafId) return
+  if (entry.rafId || typeof requestAnimationFrame === 'undefined') return
   entry.rafId = requestAnimationFrame(() => captureSnapshotNow(entry))
 }
 
 function scheduleDirtyScopeNotify(entry: SnapshotEntry, scopeEl: HTMLElement): void {
   entry.dirtyScopes.add(scopeEl)
-  if (entry.dirtyScopeRaf) return
+  if (entry.dirtyScopeRaf || typeof requestAnimationFrame === 'undefined') return
   entry.dirtyScopeRaf = requestAnimationFrame(() => {
     entry.dirtyScopeRaf = 0
     if (entry.dirtyScopes.size === 0) return
@@ -1163,53 +1146,24 @@ function scheduleDirtyScopeNotify(entry: SnapshotEntry, scopeEl: HTMLElement): v
   })
 }
 
-export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | null): TargetSnapshot | null {
-  const entry = snapshotRegistry.get(target)
-  if (!entry) return null
-  if (entry.deferredWhileHidden && isTargetActive(entry)) {
-    entry.deferredWhileHidden = false
-    scheduleSnapshotRefresh(entry)
+function releaseConsumerBuffers(rec: ConsumerRecord): void {
+  if (rec.compCanvas) {
+    rec.compCanvas.width = 0
+    rec.compCanvas.height = 0
+    rec.compCanvas = null
+    rec.compCtx = null
   }
-  if (!entry.snapshot) return null
-  const base = entry.snapshot
+  rec.compSnapshot = null
+}
 
-  if (!rootEl || entry.consumers.size <= 1) return base
-
-  const consumerScope = resolveGlassScope(rootEl, target)
-  let consumerRec: ConsumerRecord | undefined
-  for (const rec of entry.consumers.values()) {
-    if (rec.rootEl === rootEl) {
-      consumerRec = rec
-      break
-    }
-  }
-  if (!consumerRec) return base
-
-  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-  const consumerRect = getScopeRect(consumerRec, now) ?? consumerScope.getBoundingClientRect()
-  const lowerScopes: HTMLElement[] = []
-  const seenScopes = new Set<HTMLElement>()
-  const skipElements = new Set<Element>([consumerScope, rootEl])
-
-  for (const rec of entry.consumers.values()) {
-    const otherScope = rec.scopeEl
-    if (!otherScope || otherScope === consumerScope) continue
-    const otherRect = getScopeRect(rec, now)
-    if (!otherRect || !rectsOverlap(otherRect, consumerRect, OVERLAP_MARGIN)) continue
-
-    const order = comparePaintOrder(otherScope, consumerScope, target)
-    if (order >= 0) {
-      skipElements.add(otherScope)
-      continue
-    }
-    if (seenScopes.has(otherScope)) continue
-    seenScopes.add(otherScope)
-    lowerScopes.push(otherScope)
-  }
-
-  consumerRec.lastOverlappedScopes = new Set(lowerScopes)
-  if (lowerScopes.length === 0) return base
-
+function buildCompositedSnapshot(
+  entry: SnapshotEntry,
+  target: HTMLElement,
+  base: TargetSnapshot,
+  consumerRec: ConsumerRecord,
+  lowerScopes: HTMLElement[],
+  skipElements: Set<Element>,
+): TargetSnapshot {
   lowerScopes.sort((a, b) => comparePaintOrder(a, b, target))
 
   if (!consumerRec.compCanvas) {
@@ -1250,6 +1204,58 @@ export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | nu
   return consumerRec.compSnapshot
 }
 
+export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | null): TargetSnapshot | null {
+  const entry = snapshotRegistry.get(target)
+  if (!entry) return null
+  if (entry.deferredWhileHidden && isTargetActive(entry)) {
+    entry.deferredWhileHidden = false
+    scheduleSnapshotRefresh(entry)
+  }
+  if (!entry.snapshot) return null
+  const base = entry.snapshot
+
+  if (!rootEl || entry.consumers.size <= 1) return base
+
+  const consumerScope = resolveGlassScope(rootEl, target)
+  let consumerRec: ConsumerRecord | undefined
+  for (const rec of entry.consumers.values()) {
+    if (rec.rootEl === rootEl) {
+      consumerRec = rec
+      break
+    }
+  }
+  if (!consumerRec) return base
+
+  const now = nowMs()
+  const consumerRect = getScopeRect(consumerRec, now) ?? consumerScope.getBoundingClientRect()
+  const lowerScopes: HTMLElement[] = []
+  const seenScopes = new Set<HTMLElement>()
+  const skipElements = new Set<Element>([consumerScope, rootEl])
+
+  for (const rec of entry.consumers.values()) {
+    const otherScope = rec.scopeEl
+    if (!otherScope || otherScope === consumerScope) continue
+    const otherRect = getScopeRect(rec, now)
+    if (!otherRect || !rectsOverlap(otherRect, consumerRect, OVERLAP_MARGIN_PX)) continue
+
+    if (comparePaintOrder(otherScope, consumerScope, target) >= 0) {
+      skipElements.add(otherScope)
+      continue
+    }
+    if (seenScopes.has(otherScope)) continue
+    seenScopes.add(otherScope)
+    lowerScopes.push(otherScope)
+  }
+
+  consumerRec.lastOverlappedScopes = new Set(lowerScopes)
+  if (lowerScopes.length === 0) {
+    releaseConsumerBuffers(consumerRec)
+    return base
+  }
+
+  return buildCompositedSnapshot(entry, target, base, consumerRec, lowerScopes, skipElements)
+}
+
 export function notifyGlassRedrawn(target: HTMLElement, rootEl: HTMLElement | null): void {
   const entry = snapshotRegistry.get(target)
   if (!entry || !rootEl || entry.consumers.size <= 1) return
@@ -1272,6 +1278,14 @@ export function subscribeTargetSnapshot(
   onUpdate: () => void,
   rootEl?: HTMLElement | null,
 ): () => void {
+  if (
+    typeof document === 'undefined' ||
+    typeof ResizeObserver === 'undefined' ||
+    typeof MutationObserver === 'undefined'
+  ) {
+    return () => {}
+  }
+
   let entry = snapshotRegistry.get(target)
   if (!entry) {
     const canvas = document.createElement('canvas')
@@ -1294,7 +1308,6 @@ export function subscribeTargetSnapshot(
       dirtyScopes: new Set(),
       dirtyScopeRaf: 0,
       rafId: 0,
-      fontsHooked: false,
       io: null,
       onMedia: () => scheduleSnapshotRefresh(created),
       onVisibilityChange: () => {
@@ -1307,8 +1320,7 @@ export function subscribeTargetSnapshot(
       mo: new MutationObserver((records) => {
         for (const rec of records) {
           const el = rec.target instanceof Element ? rec.target : rec.target.parentElement
-          if (!el) continue
-          if (el.closest('[data-lg-root]')) continue
+          if (!el || el.closest('[data-lg-root]')) continue
           const ignoredScope = el.closest('[data-lg-ignore]')
           if (ignoredScope instanceof HTMLElement && ignoredScope !== created.target) {
             scheduleDirtyScopeNotify(created, ignoredScope)
@@ -1331,27 +1343,19 @@ export function subscribeTargetSnapshot(
             scheduleSnapshotRefresh(created)
           }
         },
-        { rootMargin: '200px' },
+        { rootMargin: SNAPSHOT_ROOT_MARGIN },
       )
       created.io.observe(target)
     }
 
     created.ro.observe(target)
-    created.mo.observe(target, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true,
-    })
+    created.mo.observe(target, { childList: true, subtree: true, attributes: true, characterData: true })
     target.addEventListener('loadeddata', created.onMedia, true)
     target.addEventListener('play', created.onMedia, true)
     target.addEventListener('seeked', created.onMedia, true)
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', created.onVisibilityChange)
-    }
+    document.addEventListener('visibilitychange', created.onVisibilityChange)
 
-    if (typeof document !== 'undefined' && document.fonts?.ready) {
-      created.fontsHooked = true
+    if (document.fonts?.ready) {
       void document.fonts.ready.then(() => {
         if (snapshotRegistry.has(target)) scheduleSnapshotRefresh(created)
       })
@@ -1381,10 +1385,14 @@ export function subscribeTargetSnapshot(
   return () => {
     const cur = snapshotRegistry.get(target)
     if (!cur) return
-    cur.consumers.delete(onUpdate)
+    const rec = cur.consumers.get(onUpdate)
+    if (rec) {
+      releaseConsumerBuffers(rec)
+      cur.consumers.delete(onUpdate)
+    }
     if (cur.consumers.size === 0) {
-      if (cur.rafId) cancelAnimationFrame(cur.rafId)
-      if (cur.dirtyScopeRaf) cancelAnimationFrame(cur.dirtyScopeRaf)
+      if (cur.rafId && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(cur.rafId)
+      if (cur.dirtyScopeRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(cur.dirtyScopeRaf)
       cur.ro.disconnect()
       cur.mo.disconnect()
       cur.io?.disconnect()
@@ -1394,6 +1402,9 @@ export function subscribeTargetSnapshot(
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', cur.onVisibilityChange)
       }
+      releaseWebGLSnapshot(cur.canvas)
+      cur.canvas.width = 0
+      cur.canvas.height = 0
       snapshotRegistry.delete(target)
       notifySnapshotStats()
     }

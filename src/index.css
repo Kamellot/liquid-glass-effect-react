@@ -5,7 +5,7 @@
   --accent: #8f8bf7;
   --line: rgb(255 255 255 / 0.08);
   color-scheme: only dark;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -221,7 +221,7 @@ button {
 }
 
 .debug-row code {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, monospace;
   color: #c4c2ff;
   font-size: 11px;
 }
@@ -232,7 +232,7 @@ button {
   gap: 10px;
   margin-top: 2px;
   font-size: 11px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, monospace;
 }
 
 .legend-r {
@@ -356,7 +356,7 @@ button {
   user-select: none;
 }
 
-/* iOS 26/27 Liquid Glass switch: slim track in domSnapshot + protruding clear refractive capsule */
+/* Recessed pill switch: slim track in domSnapshot + protruding clear refractive capsule */
 .liquid-switch {
   position: relative;
   width: 76px;
@@ -443,7 +443,7 @@ button {
     background-color 120ms ease;
 }
 
-/* Apple Liquid Glass segmented control: continuous track with lifted overhanging glass lens */
+/* Optical segmented control: continuous track with lifted overhanging glass lens */
 .liquid-seg {
   position: relative;
   display: inline-grid;
@@ -556,7 +556,7 @@ button {
 }
 
 .card code {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, monospace;
   font-size: 13px;
   color: #c9c7ff;
 }
@@ -622,7 +622,7 @@ button {
   }
 }
 
-/* ── Floating Apple Liquid Glass Search Bar ──────────────────────────────── */
+/* ── Floating Liquid Glass Search Bar ────────────────────────────────────── */
 .floating-search-slot {
   display: flex;
   justify-content: center;
@@ -743,7 +743,7 @@ button {
   pointer-events: none;
 }
 
-/* ── Apple Dock layer hierarchy: Dock -> Frame -> Material -> App Icons ─── */
+/* ── Optical Dock layer hierarchy: Dock -> Frame -> Material -> App Icons ── */
 .dock {
   position: absolute;
   left: 0;
@@ -991,7 +991,7 @@ button {
 }
 
 .foot code {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, monospace;
   color: #c9c7ff;
   font-size: 12.5px;
 }
@@ -1079,6 +1079,11 @@ button {
 .cp-light-switch {
   display: inline-flex;
   gap: 4px;
+}
+
+.seg {
+  padding: 4px 11px;
+  font-size: 12px;
 }
 
 .seg--active {
@@ -1186,27 +1191,6 @@ button {
 .cp-foot b {
   color: #cfd0d8;
   font-weight: 500;
-}
-
-.cp-shine {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.cp-foot-label {
-  margin-right: 2px;
-}
-
-.seg {
-  padding: 4px 11px;
-  font-size: 12px;
-}
-
-.seg--on {
-  background: rgb(143 139 247 / 0.25);
-  border-color: rgb(143 139 247 / 0.55);
-  color: #fff;
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
@@ -1357,7 +1341,7 @@ button {
 }
 
 .video-sub code {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, monospace;
   color: #c4c2ff;
   font-size: 12px;
 }

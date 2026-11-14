@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LiquidGlass, type LiquidGlassProps } from '../glass'
+import { clamp, clamp01 } from './utils'
 
 function Skip15Icon({ direction }: { direction: 'back' | 'forward' }) {
   const isBack = direction === 'back'
@@ -35,7 +36,7 @@ function Skip15Icon({ direction }: { direction: 'back' | 'forward' }) {
         fontSize="10.2"
         fontWeight="700"
         fill="currentColor"
-        fontFamily="system-ui, -apple-system, sans-serif"
+        fontFamily="system-ui, sans-serif"
       >
         15
       </text>
@@ -44,7 +45,7 @@ function Skip15Icon({ direction }: { direction: 'back' | 'forward' }) {
 }
 
 /**
- * Apple iOS 27 / visionOS floating Liquid Glass video player controls over live `<video>`.
+ * Floating Liquid Glass video player controls over live `<video>`.
  * `domSnapshot.ts` captures live video frames so every glass button and scrubber pill refracts motion in real time.
  */
 export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
@@ -88,7 +89,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
       if (v) {
         const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 45
         setDuration(dur)
-        setProgress(Math.min(1, Math.max(0, v.currentTime / dur)))
+        setProgress(clamp01(v.currentTime / dur))
         setPlaying(!v.paused && !v.ended)
       }
       return undefined
@@ -104,7 +105,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
       if (!controlsVisibleRef.current) return
       const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 45
       setDuration(dur)
-      setProgress(Math.min(1, Math.max(0, v.currentTime / dur)))
+      setProgress(clamp01(v.currentTime / dur))
       setPlaying(!v.paused && !v.ended)
     }
     v.addEventListener('timeupdate', sync)
@@ -138,7 +139,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
       const v = videoRef.current
       if (!v) return
       const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration
-      const next = Math.min(dur, Math.max(0, v.currentTime + delta))
+      const next = clamp(v.currentTime + delta, 0, dur)
       v.currentTime = next
       setProgress(next / dur)
     },
@@ -152,7 +153,7 @@ export function VideoScene({ glass }: { glass: LiquidGlassProps }) {
       if (!bar) return
       const rect = bar.getBoundingClientRect()
       if (rect.width <= 0) return
-      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+      const ratio = clamp01((clientX - rect.left) / rect.width)
       setProgress(ratio)
       if (v) {
         const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration

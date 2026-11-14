@@ -1,7 +1,7 @@
 .lg-root {
   box-sizing: border-box;
-  /* Built-in Apple Liquid Glass outer hairline contour, subtle elevation, and soft inner bevel
-     depth so glass remains crisp and legible globally — including on pure white backgrounds. */
+  /* Outer hairline contour, subtle elevation, and inner bevel depth keep glass legible
+     across light and white surfaces. */
   box-shadow:
     0 0 0 0.5px rgb(0 0 0 / 0.18),
     0 4px 16px -4px rgb(0 0 0 / 0.08),
@@ -135,4 +135,13 @@
     rgb(255 255 255 / calc(0.11 * var(--lg-glow))) 84%,
     rgb(255 255 255 / calc(0.36 * var(--lg-glow))) 100%
   );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-root,
+  .lg-root * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

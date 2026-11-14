@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { DEFAULTS, LiquidGlass, type DisplacementMapInfo, type LiquidGlassProps } from '../glass'
+import { clamp } from './utils'
 
 interface HeroProps {
   lens: LiquidGlassProps & { size: number }
@@ -32,8 +33,8 @@ export function Hero({ lens }: HeroProps) {
     const stage = stageRef.current
     const p = pos.current
     if (!stage || !p) return
-    p.x = Math.min(stage.clientWidth, Math.max(0, p.x))
-    p.y = Math.min(stage.clientHeight, Math.max(0, p.y))
+    p.x = clamp(p.x, 0, stage.clientWidth)
+    p.y = clamp(p.y, 0, stage.clientHeight)
   }, [])
 
   useLayoutEffect(() => {
@@ -114,7 +115,7 @@ export function Hero({ lens }: HeroProps) {
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div ref={stageRef} className="hero-stage">
-        <div className="hero-photo" role="img" aria-label="Abstract Apple-style layered ribbon wallpaper" />
+        <div className="hero-photo" role="img" aria-label="Abstract layered ribbon wallpaper" />
 
         <h1 id="hero-title" className="hero-title">
           It refracts anything

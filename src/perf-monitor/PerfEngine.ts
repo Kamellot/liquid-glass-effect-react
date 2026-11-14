@@ -1,4 +1,19 @@
 import {
+  BYTES_PER_MB,
+  DEFAULT_CUSTOM_METRIC_WINDOW_SIZE,
+  DEFAULT_EMIT_INTERVAL_MS,
+  DEFAULT_JANK_TOLERANCE_RATIO,
+  DEFAULT_MAX_CUSTOM_METRICS,
+  DEFAULT_MAX_FRAME_GAP_MS,
+  DEFAULT_MAX_OPEN_MARKS,
+  DEFAULT_MAX_OPEN_MARKS_PER_NAME,
+  DEFAULT_REFRESH_RATE_HZ,
+  DEFAULT_WINDOW_SIZE,
+  LONG_TASK_THRESHOLD_MS,
+  REFRESH_RATE_RESAMPLE_INTERVAL,
+  REFRESH_RATE_SAMPLE_MIN,
+} from './constants'
+import {
   CustomMetricTracker,
   FrameRingBuffer,
   computePercentile,
@@ -27,13 +42,53 @@ interface NavigatorWithDeviceMemory extends Navigator {
   deviceMemory?: number
 }
 
-const BYTES_PER_MB = 1024 * 1024
-const DEFAULT_WINDOW_SIZE = 120
-const DEFAULT_EMIT_INTERVAL_MS = 250
-const DEFAULT_JANK_TOLERANCE_RATIO = 1.2
-const DEFAULT_MAX_FRAME_GAP_MS = 5000
-const DEFAULT_MAX_OPEN_MARKS_PER_NAME = 64
-const LONG_TASK_THRESHOLD_MS = 50
+const EMPTY_MEMORY: MemoryMetrics = {
+  usedJSHeapSizeMb: null,
+  totalJSHeapSizeMb: null,
+  jsHeapSizeLimitMb: null,
+}
+
+const SSR_DEVICE_HINTS: DeviceHints = {
+  hardwareConcurrency: null,
+  deviceMemoryGb: null,
+  prefersReducedMotion: false,
+  devicePixelRatio: 1,
+  userAgent: 'unknown',
+  estimatedTier: 'high',
+}
+
+function buildStaticSnapshot(
+  refreshRateHz: number,
+  jankToleranceRatio: number,
+): PerfSnapshot {
+  const frameBudgetMs = 1000 / refreshRateHz
+  return {
+    isRunning: false,
+    timestamp: 0,
+    fps: 0,
+    avgFrameTime: 0,
+    p95FrameTime: 0,
+    p99FrameTime: 0,
+    minFrameTime: 0,
+    maxFrameTime: 0,
+    refreshRateHz,
+    frameBudgetMs: round2(frameBudgetMs),
+    jankThresholdMs: round2(frameBudgetMs * jankToleranceRatio),
+    droppedFrames: 0,
+    severeJankFrames: 0,
+    jankPercent: 0,
+    windowFrames: 0,
+    totalFrames: 0,
+    longTaskCount: 0,
+    totalBlockingTimeMs: 0,
+    maxLongTaskMs: 0,
+    longTaskSupported: false,
+    jsHeapUsedMb: null,
+    memory: EMPTY_MEMORY,
+    deviceHints: SSR_DEVICE_HINTS,
+    customMetrics: {},
+  }
+}
 
 function defaultNow(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -43,21 +98,9 @@ function defaultNow(): number {
 }
 
 function readMemoryMetrics(): MemoryMetrics {
-  if (typeof performance === 'undefined') {
-    return {
-      usedJSHeapSizeMb: null,
-      totalJSHeapSizeMb: null,
-      jsHeapSizeLimitMb: null,
-    }
-  }
+  if (typeof performance === 'undefined') return EMPTY_MEMORY
   const mem = (performance as PerformanceWithMemory).memory
-  if (!mem) {
-    return {
-      usedJSHeapSizeMb: null,
-      totalJSHeapSizeMb: null,
-      jsHeapSizeLimitMb: null,
-    }
-  }
+  if (!mem) return EMPTY_MEMORY
 
   const toMb = (bytes: unknown): number | null =>
     typeof bytes === 'number' && Number.isFinite(bytes) && bytes >= 0
@@ -145,11 +188,6 @@ function supportsLongTaskObserver(): boolean {
   return true
 }
 
-/**
- * Zero-dependency, framework-agnostic telemetry engine tracking rolling frame
- * timings, refresh rate, jank/dropped frames, Long Tasks (TBT), JS heap memory,
- * device capability hints, and custom operation marks.
- */
 export class PerfEngine implements PerfEngineLike {
   private readonly ring: FrameRingBuffer
   private readonly customTracker: CustomMetricTracker
@@ -157,9 +195,9 @@ export class PerfEngine implements PerfEngineLike {
   private readonly fixedRefreshRateHz: number | null
   private readonly jankToleranceRatio: number
   private readonly maxFrameGapMs: number
-  private readonly clock: () => number
-  private readonly requestFrameFn: ((cb: (ts: number) => void) => number) | null
-  private readonly cancelFrameFn: ((handle: number) => void) | null
+  private readonly customClock: (() => number) | null
+  private readonly customRequestFrame: ((cb: (ts: number) => void) => number) | null
+  private readonly customCancelFrame: ((handle: number) => void) | null
 
   private readonly snapshotListeners = new Set<() => void>()
   private readonly eventListeners = new Set<(event: PerfEvent) => void>()
@@ -181,19 +219,20 @@ export class PerfEngine implements PerfEngineLike {
   private longTaskCount = 0
   private totalBlockingTimeMs = 0
   private maxLongTaskMs = 0
-  private readonly longTaskSupported: boolean
 
   private visibilityCleanup: (() => void) | null = null
   private reducedMotionCleanup: (() => void) | null = null
 
+  private readonly serverSnapshot: PerfSnapshot
   private cachedSnapshot: PerfSnapshot
 
   constructor(options: PerfEngineOptions = {}) {
+    // Constructor stays free of browser global reads so importing perfMonitor is SSR-safe.
     const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE
     this.ring = new FrameRingBuffer(windowSize)
     this.customTracker = new CustomMetricTracker(
-      options.maxCustomMetrics ?? 64,
-      options.customMetricWindowSize ?? 120,
+      options.maxCustomMetrics ?? DEFAULT_MAX_CUSTOM_METRICS,
+      options.customMetricWindowSize ?? DEFAULT_CUSTOM_METRIC_WINDOW_SIZE,
     )
     this.emitIntervalMs = Math.max(0, options.emitIntervalMs ?? DEFAULT_EMIT_INTERVAL_MS)
     this.fixedRefreshRateHz =
@@ -215,36 +254,26 @@ export class PerfEngine implements PerfEngineLike {
         ? options.maxFrameGapMs
         : DEFAULT_MAX_FRAME_GAP_MS
 
-    this.clock = options.now ?? defaultNow
-    this.requestFrameFn =
-      options.requestFrame ??
-      (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
-        ? (cb) => window.requestAnimationFrame(cb)
-        : null)
-    this.cancelFrameFn =
-      options.cancelFrame ??
-      (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
-        ? (id) => window.cancelAnimationFrame(id)
-        : null)
+    this.customClock = options.now ?? null
+    this.customRequestFrame = options.requestFrame ?? null
+    this.customCancelFrame = options.cancelFrame ?? null
 
-    this.detectedRefreshRateHz = this.fixedRefreshRateHz ?? 60
-    this.longTaskSupported = supportsLongTaskObserver()
-    this.cachedSnapshot = this.buildSnapshot(this.clock())
+    this.detectedRefreshRateHz = this.fixedRefreshRateHz ?? DEFAULT_REFRESH_RATE_HZ
+    this.serverSnapshot = buildStaticSnapshot(
+      this.detectedRefreshRateHz,
+      this.jankToleranceRatio,
+    )
+    this.cachedSnapshot = this.serverSnapshot
   }
 
   now(): number {
-    return this.clock()
+    return this.customClock ? this.customClock() : defaultNow()
   }
 
   isRunning(): boolean {
     return this.running
   }
 
-  /**
-   * Reference-counted acquisition for components/controllers. Automatically starts
-   * observation on first acquire and stops when the final handle is released
-   * (unless start() was called manually).
-   */
   acquire(): () => void {
     let released = false
     this.activeAcquires += 1
@@ -268,7 +297,7 @@ export class PerfEngine implements PerfEngineLike {
   }
 
   reset(): void {
-    const timestamp = this.clock()
+    const timestamp = this.now()
     this.ring.clear()
     this.customTracker.clear()
     this.openMarks.clear()
@@ -281,27 +310,25 @@ export class PerfEngine implements PerfEngineLike {
     this.maxLongTaskMs = 0
     this.lastFrameTimestamp = null
     this.lastEmitTimestamp = null
-    this.detectedRefreshRateHz = this.fixedRefreshRateHz ?? 60
+    this.detectedRefreshRateHz = this.fixedRefreshRateHz ?? DEFAULT_REFRESH_RATE_HZ
 
     this.emitEvent({ type: 'reset', timestamp })
     this.rebuildAndNotify(timestamp)
   }
 
   flush(): PerfSnapshot {
-    this.rebuildAndNotify(this.clock())
+    this.rebuildAndNotify(this.now())
     return this.cachedSnapshot
   }
 
-  /**
-   * Referentially stable snapshot getter safe for React's useSyncExternalStore.
-   */
   getSnapshot(): PerfSnapshot {
     return this.cachedSnapshot
   }
 
-  /**
-   * Alias of getSnapshot() returning the latest published performance metrics.
-   */
+  getServerSnapshot(): PerfSnapshot {
+    return this.serverSnapshot
+  }
+
   getMetrics(): PerfSnapshot {
     return this.cachedSnapshot
   }
@@ -324,14 +351,14 @@ export class PerfEngine implements PerfEngineLike {
     if (!name) return
     let stack = this.openMarks.get(name)
     if (!stack) {
-      if (this.openMarks.size >= 128) return
+      if (this.openMarks.size >= DEFAULT_MAX_OPEN_MARKS) return
       stack = []
       this.openMarks.set(name, stack)
     }
     if (stack.length >= DEFAULT_MAX_OPEN_MARKS_PER_NAME) {
       stack.shift()
     }
-    stack.push(this.clock())
+    stack.push(this.now())
   }
 
   markEnd(name: string): number | null {
@@ -342,7 +369,7 @@ export class PerfEngine implements PerfEngineLike {
     if (stack.length === 0) {
       this.openMarks.delete(name)
     }
-    const durationMs = Math.max(0, this.clock() - startTs)
+    const durationMs = Math.max(0, this.now() - startTs)
     this.recordMetric(name, durationMs)
     return durationMs
   }
@@ -355,7 +382,7 @@ export class PerfEngine implements PerfEngineLike {
     const recorded = this.customTracker.record(name, durationMs)
     if (!recorded) return
 
-    const timestamp = this.clock()
+    const timestamp = this.now()
     this.emitEvent({
       type: 'metric',
       timestamp,
@@ -363,10 +390,9 @@ export class PerfEngine implements PerfEngineLike {
       durationMs: Math.max(0, durationMs),
     })
 
-    // Rebuild immediately when idle, without rAF, or once emit interval elapses.
     if (
       !this.running ||
-      !this.requestFrameFn ||
+      !this.hasFrameScheduler() ||
       this.emitIntervalMs === 0 ||
       this.lastEmitTimestamp === null ||
       timestamp - this.lastEmitTimestamp >= this.emitIntervalMs
@@ -382,6 +408,31 @@ export class PerfEngine implements PerfEngineLike {
       return fn()
     } finally {
       this.markEnd(name)
+    }
+  }
+
+  private hasFrameScheduler(): boolean {
+    return (
+      this.customRequestFrame !== null ||
+      (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function')
+    )
+  }
+
+  private requestFrame(cb: (ts: number) => void): number | null {
+    if (this.customRequestFrame) return this.customRequestFrame(cb)
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      return window.requestAnimationFrame(cb)
+    }
+    return null
+  }
+
+  private cancelFrame(handle: number): void {
+    if (this.customCancelFrame) {
+      this.customCancelFrame(handle)
+      return
+    }
+    if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(handle)
     }
   }
 
@@ -402,26 +453,26 @@ export class PerfEngine implements PerfEngineLike {
     this.attachLongTaskObserver()
     this.attachEnvironmentListeners()
     this.scheduleNextFrame()
-    this.rebuildAndNotify(this.clock())
+    this.rebuildAndNotify(this.now())
   }
 
   private endObservation(): void {
     this.running = false
     this.lastFrameTimestamp = null
 
-    if (this.rafHandle !== null && this.cancelFrameFn) {
-      this.cancelFrameFn(this.rafHandle)
+    if (this.rafHandle !== null) {
+      this.cancelFrame(this.rafHandle)
+      this.rafHandle = null
     }
-    this.rafHandle = null
 
     this.detachLongTaskObserver()
     this.detachEnvironmentListeners()
-    this.rebuildAndNotify(this.clock())
+    this.rebuildAndNotify(this.now())
   }
 
   private scheduleNextFrame(): void {
-    if (!this.running || !this.requestFrameFn) return
-    this.rafHandle = this.requestFrameFn(this.handleAnimationFrame)
+    if (!this.running) return
+    this.rafHandle = this.requestFrame(this.handleAnimationFrame)
   }
 
   private readonly handleAnimationFrame = (timestamp: number): void => {
@@ -442,7 +493,7 @@ export class PerfEngine implements PerfEngineLike {
       return
     }
 
-    // Ignore huge gaps (e.g., backgrounded tab or device sleep) to avoid skewing stats.
+    // Discard backgrounded-tab or sleep gaps so resume spikes do not poison rolling P95/P99.
     if (deltaMs > this.maxFrameGapMs) {
       this.scheduleNextFrame()
       return
@@ -453,8 +504,9 @@ export class PerfEngine implements PerfEngineLike {
 
     if (
       this.fixedRefreshRateHz === null &&
-      this.ring.length >= 15 &&
-      (this.totalFrames === 15 || this.totalFrames % 30 === 0)
+      this.ring.length >= REFRESH_RATE_SAMPLE_MIN &&
+      (this.totalFrames === REFRESH_RATE_SAMPLE_MIN ||
+        this.totalFrames % REFRESH_RATE_RESAMPLE_INTERVAL === 0)
     ) {
       const sorted = this.ring.getSorted()
       this.detectedRefreshRateHz = detectRefreshRateFromSorted(
@@ -474,13 +526,7 @@ export class PerfEngine implements PerfEngineLike {
     if (dropped) this.droppedFrames += 1
     if (severe) this.severeJankFrames += 1
 
-    this.emitEvent({
-      type: 'frame',
-      timestamp,
-      deltaMs,
-      dropped,
-      severe,
-    })
+    this.emitEvent({ type: 'frame', timestamp, deltaMs, dropped, severe })
 
     if (
       this.totalFrames === 1 ||
@@ -495,11 +541,11 @@ export class PerfEngine implements PerfEngineLike {
   }
 
   private attachLongTaskObserver(): void {
-    if (!this.longTaskSupported || this.longTaskObserver) return
+    if (!supportsLongTaskObserver() || this.longTaskObserver) return
     try {
       const observer = new PerformanceObserver((list) => {
         const entries = list.getEntries()
-        const nowTs = this.clock()
+        const nowTs = this.now()
         let updated = false
 
         for (let i = 0; i < entries.length; i++) {
@@ -543,7 +589,7 @@ export class PerfEngine implements PerfEngineLike {
     try {
       this.longTaskObserver.disconnect()
     } catch {
-      // Ignore observer teardown errors in restricted environments.
+      // Ignore teardown failures in restricted runtimes.
     }
     this.longTaskObserver = null
   }
@@ -564,7 +610,7 @@ export class PerfEngine implements PerfEngineLike {
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
       const onMotionChange = () => {
-        this.rebuildAndNotify(this.clock())
+        this.rebuildAndNotify(this.now())
       }
       if (typeof mql.addEventListener === 'function') {
         mql.addEventListener('change', onMotionChange)
@@ -602,8 +648,12 @@ export class PerfEngine implements PerfEngineLike {
 
     if (this.fixedRefreshRateHz !== null) {
       this.detectedRefreshRateHz = this.fixedRefreshRateHz
-    } else if (windowFrames >= 15) {
-      this.detectedRefreshRateHz = detectRefreshRateFromSorted(sorted, windowFrames, 60)
+    } else if (windowFrames >= REFRESH_RATE_SAMPLE_MIN) {
+      this.detectedRefreshRateHz = detectRefreshRateFromSorted(
+        sorted,
+        windowFrames,
+        DEFAULT_REFRESH_RATE_HZ,
+      )
     }
 
     const refreshRateHz = this.detectedRefreshRateHz
@@ -617,8 +667,7 @@ export class PerfEngine implements PerfEngineLike {
     const minFrameTime = windowFrames > 0 ? sorted[0] : 0
     const maxFrameTime = windowFrames > 0 ? sorted[windowFrames - 1] : 0
 
-    const windowDropped =
-      windowFrames > 0 ? this.ring.countAbove(jankThresholdMs) : 0
+    const windowDropped = windowFrames > 0 ? this.ring.countAbove(jankThresholdMs) : 0
     const jankPercent = windowFrames > 0 ? (windowDropped / windowFrames) * 100 : 0
 
     const memory = readMemoryMetrics()
@@ -644,7 +693,7 @@ export class PerfEngine implements PerfEngineLike {
       longTaskCount: this.longTaskCount,
       totalBlockingTimeMs: round2(this.totalBlockingTimeMs),
       maxLongTaskMs: round2(this.maxLongTaskMs),
-      longTaskSupported: this.longTaskSupported,
+      longTaskSupported: supportsLongTaskObserver(),
       jsHeapUsedMb: memory.usedJSHeapSizeMb,
       memory,
       deviceHints,

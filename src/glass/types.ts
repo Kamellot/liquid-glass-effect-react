@@ -1,23 +1,23 @@
-import type { CSSProperties, ReactNode, RefObject } from 'react'
+import type { HTMLAttributes, RefObject } from 'react'
 
 /**
  * Optical and geometric parameters for `<LiquidGlass />`.
- * All optical values use the same 0–100 scale as native Apple / Figma "Glass" panels.
+ * All optical values use a normalized 0–100 scale.
  */
 export interface LiquidGlassOptions {
-  /** Explicit square diameter (px) for standalone lenses; omitted when auto-measuring parent/content. */
+  /** Explicit square diameter (px) for standalone lenses; omitted when auto-measuring parent or content. */
   size?: number
-  /** Strength of edge light bending (0–100, default 70). Scales the rim pull distance, like feDisplacementMap `scale`. */
+  /** Strength of edge light bending (0–100, default 70). Scales the rim pull distance. */
   refraction?: number
   /** Physical bevel/rim width in px measured from the outer edge inward (0–100, default 30). */
   depth?: number
-  /** Chromatic dispersion: RGB channel separation, confined to the curved bevel (0–100, default 20). */
+  /** Chromatic dispersion: RGB channel separation confined to the curved bevel (0–100, default 20). */
   dispersion?: number
   /** Frosted surface diffusion: blur plus a subtle saturation boost (0–100, default 6). */
   frost?: number
   /** Falloff smoothness: how gently the bent rim eases into the flat center (0–100, default 20). */
   splay?: number
-  /** Lighting mode: 'natural' (default top & bottom white border glow) or 'custom' (directional angle, intensity, glow). */
+  /** Lighting mode: 'natural' (top & bottom white border glow) or 'custom' (directional angle, intensity, glow). */
   lightMode?: LiquidGlassLightMode
   /** Light source direction in degrees for 'custom' mode, 0 = top (0–360, default 0). */
   lightAngle?: number
@@ -33,18 +33,18 @@ export interface LiquidGlassOptions {
   /** Optional UI background color/tint fill applied seamlessly across interior and refracted bevel. */
   tint?: string
   /**
-   * Figma-style `Fill + Shadow` base fill color (e.g. `'#101010'`, `'rgb(30 64 175 / 0.75)'`),
-   * or `true` to use Figma's default `#101010` fill.
+   * Base surface fill color for Fill + Shadow mode (e.g. `'#101010'`, `'rgb(30 64 175 / 0.75)'`),
+   * or `true` to use the default `#101010` optical material fill.
    */
   fill?: string | boolean
   /**
-   * Top surface sheen layered over `fill` (Figma default: `'rgb(255 255 255 / 0.04)'`).
+   * Top surface sheen layered over `fill` (default: `'rgb(255 255 255 / 0.04)'`).
    * Set to `'none'` or `'transparent'` to disable.
    */
   fillOverlay?: string
   /**
-   * Figma-style `Fill + Shadow` edge/drop shadows.
-   * `true` (or omitted when `fill` is set) uses Figma's default directional edge shadows;
+   * Edge/drop shadows for Fill + Shadow mode.
+   * `true` (or omitted when `fill` is set) uses the default directional edge shadows;
    * pass a custom CSS `box-shadow` string to customize, or `false` / `'none'` to disable.
    */
   shadow?: string | boolean
@@ -64,44 +64,17 @@ export interface DisplacementMapInfo {
   hash: string
 }
 
-export interface LiquidGlassProps extends LiquidGlassOptions {
-  /** Integration pattern: Apple Material 'layer' (default) or 'wrapper'. */
+export interface LiquidGlassProps
+  extends LiquidGlassOptions,
+    Omit<HTMLAttributes<HTMLDivElement>, 'color'> {
+  /** Integration pattern: optical material `'layer'` (default) or `'wrapper'`. */
   mode?: LiquidGlassMode
   /** Skip `<LiquidGlassProvider>` global configuration for this instance and use local props + built-in defaults only. */
   ignoreGlobal?: boolean
-  /** Target layer element/ref for universal cross-browser Canvas SDF refraction. */
+  /** Target layer element/ref for cross-browser Canvas/WebGL SDF refraction. */
   refractionTarget?: RefObject<HTMLElement | null> | HTMLElement | null
-  /** Optional children (used in 'wrapper' mode). */
-  children?: ReactNode
-  className?: string
-  style?: CSSProperties
   /** Callback invoked when the displacement map or bevel field updates (useful for debug previews). */
   onMapUpdate?: (info: DisplacementMapInfo) => void
-}
-
-export const DEFAULT_LENS_SIZE = 166
-
-export const FIGMA_MATERIAL_DEFAULTS = {
-  fill: '#101010',
-  fillOverlay: 'rgb(255 255 255 / 0.04)',
-  shadow: [
-    '-1.25px 0 0 -0.75px #d0d0d0',
-    '1.25px 0 0 -0.75px #d0d0d0',
-    '0 -1.25px 0 -0.75px rgb(255 255 255 / 0.35)',
-    '0 1.25px 0 -0.75px rgb(0 0 0 / 0.35)',
-  ].join(', '),
-} as const
-
-export const DEFAULTS: Required<
-  Omit<LiquidGlassOptions, 'size' | 'tint' | 'borderRadius' | 'fill' | 'fillOverlay' | 'shadow'>
-> = {
-  refraction: 70,
-  depth: 30,
-  dispersion: 20,
-  frost: 6,
-  splay: 20,
-  lightMode: 'natural',
-  lightAngle: 0,
-  lightIntensity: 40,
-  glow: 28,
+  /** Allow arbitrary `data-*` attributes on `createElement` as well as JSX. */
+  [dataAttr: `data-${string}`]: unknown
 }

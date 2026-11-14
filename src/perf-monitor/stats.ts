@@ -1,6 +1,16 @@
+import {
+  DEFAULT_CUSTOM_METRIC_WINDOW_SIZE,
+  DEFAULT_MAX_CUSTOM_METRICS,
+  DEFAULT_REFRESH_RATE_HZ,
+  REFRESH_RATE_SAMPLE_MIN,
+  REFRESH_RATE_SNAP_TOLERANCE,
+  STANDARD_REFRESH_RATES,
+} from './constants'
 import type { CustomMetricStats } from './types'
 
-const STANDARD_REFRESH_RATES = [60, 75, 90, 120, 144, 165, 240] as const
+export function clamp(value: number, min: number, max: number): number {
+  return value < min ? min : value > max ? max : value
+}
 
 export function round2(value: number): number {
   if (!Number.isFinite(value)) return 0
@@ -8,7 +18,7 @@ export function round2(value: number): number {
 }
 
 /**
- * Nearest-rank percentile over a pre-sorted ascending sequence.
+ * Nearest-rank percentile (used for P95/P99 frame budget tail analysis) over a pre-sorted array.
  */
 export function computePercentile(
   sortedValues: ArrayLike<number>,
@@ -17,22 +27,22 @@ export function computePercentile(
 ): number {
   if (length <= 0) return 0
   if (length === 1) return sortedValues[0]
-  const clamped = Math.min(1, Math.max(0, percentile))
+  const clamped = clamp(percentile, 0, 1)
   const rank = Math.ceil(clamped * length)
-  const index = Math.min(length - 1, Math.max(0, rank - 1))
+  const index = clamp(rank - 1, 0, length - 1)
   return sortedValues[index]
 }
 
 /**
- * Infers display refresh rate from the fast lower tail (15th percentile) of
- * sorted frame intervals, snapping to common panel refresh rates within 10%.
+ * Infers display refresh rate from the fast 15th percentile tail of frame deltas, resisting isolated
+ * main-thread spikes, then snaps within 10% to standard display cadence tiers.
  */
 export function detectRefreshRateFromSorted(
   sortedFrameTimes: ArrayLike<number>,
   length: number,
-  fallbackHz = 60,
+  fallbackHz = DEFAULT_REFRESH_RATE_HZ,
 ): number {
-  if (length < 15) return fallbackHz
+  if (length < REFRESH_RATE_SAMPLE_MIN) return fallbackHz
   const p15Ms = computePercentile(sortedFrameTimes, length, 0.15)
   if (p15Ms <= 0) return fallbackHz
 
@@ -49,15 +59,15 @@ export function detectRefreshRateFromSorted(
     }
   }
 
-  if (bestDiff / nearest <= 0.1) {
+  if (bestDiff / nearest <= REFRESH_RATE_SNAP_TOLERANCE) {
     return nearest
   }
-  return Math.max(60, Math.min(240, Math.round(rawHz)))
+  return clamp(Math.round(rawHz), STANDARD_REFRESH_RATES[0], STANDARD_REFRESH_RATES[STANDARD_REFRESH_RATES.length - 1])
 }
 
 /**
- * Fixed-capacity Float64 ring buffer with reusable scratch storage for
- * zero-allocation percentile computation.
+ * Fixed-capacity ring buffer with a reusable scratch array so sorting for rolling P95/P99
+ * frame times allocates zero garbage on the hot animation path.
  */
 export class FrameRingBuffer {
   readonly capacity: number
@@ -89,9 +99,6 @@ export class FrameRingBuffer {
     return this.count
   }
 
-  /**
-   * Returns a view of the active samples sorted ascending (backed by scratch).
-   */
   getSorted(): Float64Array {
     const n = this.count
     if (n === 0) return this.scratch.subarray(0, 0)
@@ -137,15 +144,15 @@ interface CustomMetricBucket {
   ring: FrameRingBuffer
 }
 
-/**
- * Tracks named operation durations with rolling p95 statistics.
- */
 export class CustomMetricTracker {
   private readonly buckets = new Map<string, CustomMetricBucket>()
   private readonly maxMetrics: number
   private readonly windowSize: number
 
-  constructor(maxMetrics = 64, windowSize = 120) {
+  constructor(
+    maxMetrics = DEFAULT_MAX_CUSTOM_METRICS,
+    windowSize = DEFAULT_CUSTOM_METRIC_WINDOW_SIZE,
+  ) {
     this.maxMetrics = Math.max(1, maxMetrics)
     this.windowSize = Math.max(1, windowSize)
   }

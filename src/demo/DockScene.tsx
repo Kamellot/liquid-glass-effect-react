@@ -30,7 +30,7 @@ const APPS: AppDef[] = [
     ),
   },
   {
-    name: 'Safari',
+    name: 'Browser',
     from: '#4cc3ff',
     to: '#0a62ff',
     glyph: (
@@ -212,7 +212,7 @@ function AppIcon({ app, dimmed }: { app: AppDef; dimmed?: boolean }) {
 const CHIPS = ['All', 'Photos', 'Albums', 'Shared'] as const
 
 /**
- * Apple iPad Dock, iOS Switch, and Floating Search showcase built with the Apple layer hierarchy:
+ * Floating Dock, Glass Switch, and Floating Search showcase built with an Optical Material hierarchy:
  * Container -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> Foreground Content.
  */
 export function DockScene({ glass }: { glass: LiquidGlassProps }) {
@@ -324,7 +324,7 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
         </article>
       </div>
 
-      {/* Floating Apple-style Liquid Glass Search Bar (draggable via pill rim / icon) */}
+      {/* Floating Liquid Glass Search Bar (draggable via pill rim / icon) */}
       <div className="floating-search-slot">
         <div
           ref={searchDrag.ref}
@@ -385,13 +385,13 @@ export function DockScene({ glass }: { glass: LiquidGlassProps }) {
         Dock → Frame → Material [LiquidGlass + Fill] → App Icons
       </p>
 
-      {/* Exact Apple layer hierarchy: Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons */}
+      {/* Layer hierarchy: Dock -> Frame -> Material [LiquidGlass + Alpha Fill & Shadow] -> App Icons */}
       <div
         ref={dockDrag.ref}
         data-lg-ignore=""
         className="dock"
         role="toolbar"
-        aria-label="iPad Dock (drag to move, click icons to bounce)"
+        aria-label="Floating Dock (drag to move, click icons to bounce)"
         onPointerDown={dockDrag.onPointerDown}
         onPointerMove={dockDrag.onPointerMove}
         onPointerUp={dockDrag.onPointerUp}

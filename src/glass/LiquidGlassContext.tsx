@@ -51,7 +51,7 @@ export interface LiquidGlassProviderProps {
    * Set to `false` to replace the parent config completely.
    */
   inherit?: boolean
-  children: ReactNode
+  children?: ReactNode
 }
 
 /**

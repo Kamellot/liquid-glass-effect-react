@@ -1,11 +1,21 @@
+import {
+  FROST_BLUR_SCALE,
+  FROST_MIN_THRESHOLD,
+  FROST_SATURATION_SCALE,
+  WEBGL_PYRAMID_LEVELS,
+} from './constants'
 import type { TargetSnapshot } from './domSnapshot'
+import { clamp } from './utils'
 
 export interface WebGLBevelParams {
   width: number
   height: number
+  hw: number
+  hh: number
+  bx: number
+  by: number
   borderRadius: number
   effectiveDepth: number
-  maxRadialSlope: number
   splayExp: number
   cornerExponent: number
   bufWidth: number
@@ -80,6 +90,7 @@ void main() {
 }
 `
 
+// 13-tap dual-filter downsample kernel to avoid ringing across mip levels.
 const DOWNSAMPLE_FRAG_SRC = `
 precision highp float;
 varying vec2 v_uv;
@@ -226,8 +237,7 @@ void main() {
   }
 
   float u = clamp(1.0 - distInward / u_effectiveDepth, 0.0, 1.0);
-  float bevelAlpha = outerAlpha;
-  if (bevelAlpha <= 0.002) {
+  if (outerAlpha <= 0.002) {
     gl_FragColor = vec4(0.0);
     return;
   }
@@ -259,8 +269,7 @@ void main() {
 
   float sxSign = fragCss.x < u_halfSize.x ? 1.0 : -1.0;
   float sySign = fragCss.y < u_halfSize.y ? 1.0 : -1.0;
-  vec2 dir = vec2(ux * sxSign, uy * sySign);
-  vec2 disp = dir * (mag * u_dispCssPx);
+  vec2 disp = vec2(ux * sxSign, uy * sySign) * (mag * u_dispCssPx);
 
   vec3 rgb;
   float sA;
@@ -286,12 +295,11 @@ void main() {
     sA = s2.a;
   }
 
-  float outA = bevelAlpha * sA;
   if (u_tint.a > 0.001) {
     rgb = mix(rgb, u_tint.rgb, u_tint.a);
   }
 
-  gl_FragColor = vec4(rgb, outA);
+  gl_FragColor = vec4(rgb, outerAlpha * sA);
 }
 `
 
@@ -343,6 +351,14 @@ function createLinkedProgram(
   return program
 }
 
+function configureClampLinearTexture(gl: WebGLRenderingContext, tex: WebGLTexture): void {
+  gl.bindTexture(gl.TEXTURE_2D, tex)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+}
+
 function initGlState(): GlState | null {
   if (glSupported === false) return null
   if (glState && !glState.contextLost) return glState
@@ -385,9 +401,9 @@ function initGlState(): GlState | null {
     glSupported = false
     return null
   }
+
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf)
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
-
   gl.enableVertexAttribArray(0)
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
   gl.useProgram(program)
@@ -444,39 +460,45 @@ export function isWebGLRefractionAvailable(): boolean {
   return initGlState() !== null
 }
 
-/** Parses CSS computed `rgb(...)` / `rgba(...)` into normalized `[r, g, b, a]`, or `null` if unparsed. */
-export function parseCssColorRgba(color: string): [number, number, number, number] | null {
-  if (!color) return null
-  const m = /^rgba?\(([^)]+)\)$/i.exec(color.trim())
-  if (!m) return null
-  const body = m[1].trim()
-  let rgbParts: string[]
-  let alphaStr: string | undefined
-  if (body.includes('/')) {
-    const [left, right] = body.split('/')
-    rgbParts = left.trim().split(/[\s,]+/)
-    alphaStr = right.trim()
-  } else {
-    rgbParts = body.split(',').map((s) => s.trim())
-    alphaStr = rgbParts[3]
+/** Releases GPU textures and downsample pyramid FBOs owned by a snapshot canvas. */
+export function releaseWebGLSnapshot(snapCanvas: HTMLCanvasElement): void {
+  const state = glState
+  if (!state) return
+  const entry = state.textures.get(snapCanvas)
+  if (!entry) return
+  state.textures.delete(snapCanvas)
+
+  if (state.contextLost || state.gl.isContextLost()) return
+  const { gl } = state
+  gl.deleteTexture(entry.tex)
+  if (entry.blurLevels) {
+    for (const level of entry.blurLevels) {
+      gl.deleteTexture(level.tex)
+      gl.deleteFramebuffer(level.fbo)
+    }
+    entry.blurLevels = null
   }
-  if (rgbParts.length < 3) return null
-  const r = parseFloat(rgbParts[0]) / 255
-  const g = parseFloat(rgbParts[1]) / 255
-  const b = parseFloat(rgbParts[2]) / 255
-  const a = alphaStr !== undefined ? parseFloat(alphaStr) : 1
-  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b) || !Number.isFinite(a)) {
-    return null
-  }
-  return [
-    r < 0 ? 0 : r > 1 ? 1 : r,
-    g < 0 ? 0 : g > 1 ? 1 : g,
-    b < 0 ? 0 : b > 1 ? 1 : b,
-    a < 0 ? 0 : a > 1 ? 1 : a,
-  ]
 }
 
-const PYRAMID_LEVELS = 5
+function allocateBlurPyramid(gl: WebGLRenderingContext): BlurLevel[] | null {
+  const levels: BlurLevel[] = []
+  for (let i = 0; i < WEBGL_PYRAMID_LEVELS; i++) {
+    const tex = gl.createTexture()
+    const fbo = gl.createFramebuffer()
+    if (!tex || !fbo) {
+      if (tex) gl.deleteTexture(tex)
+      if (fbo) gl.deleteFramebuffer(fbo)
+      for (const level of levels) {
+        gl.deleteTexture(level.tex)
+        gl.deleteFramebuffer(level.fbo)
+      }
+      return null
+    }
+    configureClampLinearTexture(gl, tex)
+    levels.push({ tex, fbo, width: 0, height: 0 })
+  }
+  return levels
+}
 
 function ensureBlurPyramid(state: GlState, texEntry: CachedSnapTexture): boolean {
   const { gl } = state
@@ -484,30 +506,11 @@ function ensureBlurPyramid(state: GlState, texEntry: CachedSnapTexture): boolean
     return true
   }
 
-  let levels = texEntry.blurLevels
-  if (!levels) {
-    levels = []
-    for (let i = 0; i < PYRAMID_LEVELS; i++) {
-      const tex = gl.createTexture()
-      const fbo = gl.createFramebuffer()
-      if (!tex || !fbo) {
-        if (tex) gl.deleteTexture(tex)
-        if (fbo) gl.deleteFramebuffer(fbo)
-        for (const l of levels) {
-          gl.deleteTexture(l.tex)
-          gl.deleteFramebuffer(l.fbo)
-        }
-        return false
-      }
-      gl.bindTexture(gl.TEXTURE_2D, tex)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-      levels.push({ tex, fbo, width: 0, height: 0 })
-    }
-    texEntry.blurLevels = levels
+  if (!texEntry.blurLevels) {
+    texEntry.blurLevels = allocateBlurPyramid(gl)
+    if (!texEntry.blurLevels) return false
   }
+  const levels = texEntry.blurLevels
 
   gl.disable(gl.SCISSOR_TEST)
   gl.disable(gl.BLEND)
@@ -519,7 +522,7 @@ function ensureBlurPyramid(state: GlState, texEntry: CachedSnapTexture): boolean
   let srcW = texEntry.width
   let srcH = texEntry.height
 
-  for (let i = 0; i < PYRAMID_LEVELS; i++) {
+  for (let i = 0; i < WEBGL_PYRAMID_LEVELS; i++) {
     const level = levels[i]
     const dstW = Math.max(1, Math.ceil(srcW * 0.5))
     const dstH = Math.max(1, Math.ceil(srcH * 0.5))
@@ -556,6 +559,39 @@ function ensureBlurPyramid(state: GlState, texEntry: CachedSnapTexture): boolean
   return true
 }
 
+function syncSnapshotTexture(state: GlState, snapshot: TargetSnapshot): CachedSnapTexture | null {
+  const { gl } = state
+  gl.activeTexture(gl.TEXTURE0)
+
+  let texEntry = state.textures.get(snapshot.canvas)
+  if (!texEntry) {
+    const tex = gl.createTexture()
+    if (!tex) return null
+    configureClampLinearTexture(gl, tex)
+    texEntry = { tex, version: -1, width: 0, height: 0, blurLevels: null, blurVersion: -1 }
+    state.textures.set(snapshot.canvas, texEntry)
+  } else {
+    gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
+  }
+
+  if (
+    texEntry.version !== snapshot.version ||
+    texEntry.width !== snapshot.width ||
+    texEntry.height !== snapshot.height
+  ) {
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapshot.canvas)
+    } catch {
+      return null
+    }
+    texEntry.version = snapshot.version
+    texEntry.width = snapshot.width
+    texEntry.height = snapshot.height
+  }
+
+  return texEntry
+}
+
 export function renderRefractedBevelWebGL(
   targetCtx: CanvasRenderingContext2D,
   field: WebGLBevelParams,
@@ -583,44 +619,16 @@ export function renderRefractedBevelWebGL(
     canvas.height = Math.max(canvas.height, bufHeight)
   }
 
-  gl.activeTexture(gl.TEXTURE0)
-  let texEntry = state.textures.get(snapshot.canvas)
-  if (!texEntry) {
-    const tex = gl.createTexture()
-    if (!tex) return false
-    gl.bindTexture(gl.TEXTURE_2D, tex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    texEntry = { tex, version: -1, width: 0, height: 0, blurLevels: null, blurVersion: -1 }
-    state.textures.set(snapshot.canvas, texEntry)
-  } else {
-    gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
-  }
+  const texEntry = syncSnapshotTexture(state, snapshot)
+  if (!texEntry) return false
 
-  if (
-    texEntry.version !== snapshot.version ||
-    texEntry.width !== snapshot.width ||
-    texEntry.height !== snapshot.height
-  ) {
-    try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapshot.canvas)
-    } catch {
-      return false
-    }
-    texEntry.version = snapshot.version
-    texEntry.width = snapshot.width
-    texEntry.height = snapshot.height
-  }
-
-  const frostClamped = frost < 0 ? 0 : frost > 100 ? 100 : frost
-  const frostPx = frostClamped * 0.2
-  const hasBlurPyramid = frostPx > 0.05 && ensureBlurPyramid(state, texEntry)
+  const frostClamped = clamp(frost, 0, 100)
+  const frostPx = frostClamped * FROST_BLUR_SCALE
+  const hasBlurPyramid = frostPx > FROST_MIN_THRESHOLD && ensureBlurPyramid(state, texEntry)
 
   gl.activeTexture(gl.TEXTURE0)
   gl.bindTexture(gl.TEXTURE_2D, texEntry.tex)
-  for (let i = 0; i < PYRAMID_LEVELS; i++) {
+  for (let i = 0; i < WEBGL_PYRAMID_LEVELS; i++) {
     gl.activeTexture(gl.TEXTURE1 + i)
     gl.bindTexture(
       gl.TEXTURE_2D,
@@ -629,16 +637,12 @@ export function renderRefractedBevelWebGL(
   }
   gl.activeTexture(gl.TEXTURE0)
 
+  // Scissor restricts clear and fragment shading to the element's exact subregion inside the shared WebGL backing canvas.
   gl.viewport(0, 0, bufWidth, bufHeight)
   gl.enable(gl.SCISSOR_TEST)
   gl.scissor(0, 0, bufWidth, bufHeight)
   gl.clearColor(0, 0, 0, 0)
   gl.clear(gl.COLOR_BUFFER_BIT)
-
-  const hw = field.width * 0.5
-  const hh = field.height * 0.5
-  const bx = Math.max(0, hw - field.borderRadius)
-  const by = Math.max(0, hh - field.borderRadius)
 
   gl.uniform1i(state.uSnapshot, 0)
   gl.uniform1i(state.uBlur1, 1)
@@ -647,8 +651,8 @@ export function renderRefractedBevelWebGL(
   gl.uniform1i(state.uBlur4, 4)
   gl.uniform1i(state.uBlur5, 5)
   gl.uniform2f(state.uSize, field.width, field.height)
-  gl.uniform2f(state.uHalfSize, hw, hh)
-  gl.uniform2f(state.uBoxHalf, bx, by)
+  gl.uniform2f(state.uHalfSize, field.hw, field.hh)
+  gl.uniform2f(state.uBoxHalf, field.bx, field.by)
   gl.uniform1f(state.uRadius, field.borderRadius)
   gl.uniform1f(state.uEffectiveDepth, field.effectiveDepth)
   gl.uniform1f(state.uSplayExp, field.splayExp)
@@ -660,7 +664,7 @@ export function renderRefractedBevelWebGL(
   gl.uniform1f(state.uDispCssPx, dispCssPx)
   gl.uniform1f(state.uSpread, spread)
   gl.uniform1f(state.uFrostPx, hasBlurPyramid ? frostPx : 0)
-  gl.uniform1f(state.uSat, 1 + frostClamped * 0.008)
+  gl.uniform1f(state.uSat, 1 + (frostClamped * FROST_SATURATION_SCALE) / 100)
   if (tintRgba) {
     gl.uniform4f(state.uTint, tintRgba[0], tintRgba[1], tintRgba[2], tintRgba[3])
   } else {

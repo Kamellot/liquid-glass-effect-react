@@ -1,3 +1,4 @@
+import { DEFAULT_ADAPTIVE_QUALITY_OPTIONS, DEFAULT_REFRESH_RATE_HZ } from './constants'
 import { perfMonitor } from './PerfEngine'
 import {
   QUALITY_TIERS,
@@ -28,71 +29,30 @@ interface ResolvedOptions {
   respectReducedMotion: boolean
 }
 
-const DEFAULT_OPTIONS: ResolvedOptions = {
-  minFpsThreshold: 45,
-  autoDowngrade: true,
-  downgradeDelayMs: 1500,
-  cooldownMs: 1500,
-  evaluationWindowMs: 600,
-  minSampleFrames: 10,
-  initialTier: 'high',
-  autoRecover: false,
-  recoveryFpsThreshold: undefined,
-  recoveryDelayMs: 5000,
-  respectReducedMotion: false,
+function resolveNumber(value: unknown, min: number, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(min, value) : fallback
 }
 
-function tierRank(tier: QualityTier): number {
-  return QUALITY_TIERS.indexOf(tier)
-}
-
-function resolveOptions(
-  input: AdaptiveQualityOptions = {},
-): ResolvedOptions {
+function resolveOptions(input: AdaptiveQualityOptions = {}): ResolvedOptions {
+  const defaults = DEFAULT_ADAPTIVE_QUALITY_OPTIONS
   return {
-    minFpsThreshold:
-      typeof input.minFpsThreshold === 'number' && Number.isFinite(input.minFpsThreshold)
-        ? Math.max(1, input.minFpsThreshold)
-        : DEFAULT_OPTIONS.minFpsThreshold,
-    autoDowngrade: input.autoDowngrade ?? DEFAULT_OPTIONS.autoDowngrade,
-    downgradeDelayMs:
-      typeof input.downgradeDelayMs === 'number' && Number.isFinite(input.downgradeDelayMs)
-        ? Math.max(0, input.downgradeDelayMs)
-        : DEFAULT_OPTIONS.downgradeDelayMs,
-    cooldownMs:
-      typeof input.cooldownMs === 'number' && Number.isFinite(input.cooldownMs)
-        ? Math.max(0, input.cooldownMs)
-        : DEFAULT_OPTIONS.cooldownMs,
-    evaluationWindowMs:
-      typeof input.evaluationWindowMs === 'number' &&
-      Number.isFinite(input.evaluationWindowMs)
-        ? Math.max(100, input.evaluationWindowMs)
-        : DEFAULT_OPTIONS.evaluationWindowMs,
-    minSampleFrames:
-      typeof input.minSampleFrames === 'number' && Number.isFinite(input.minSampleFrames)
-        ? Math.max(2, Math.floor(input.minSampleFrames))
-        : DEFAULT_OPTIONS.minSampleFrames,
-    initialTier: input.initialTier ?? DEFAULT_OPTIONS.initialTier,
-    autoRecover: input.autoRecover ?? DEFAULT_OPTIONS.autoRecover,
+    minFpsThreshold: resolveNumber(input.minFpsThreshold, 1, defaults.minFpsThreshold),
+    autoDowngrade: input.autoDowngrade ?? defaults.autoDowngrade,
+    downgradeDelayMs: resolveNumber(input.downgradeDelayMs, 0, defaults.downgradeDelayMs),
+    cooldownMs: resolveNumber(input.cooldownMs, 0, defaults.cooldownMs),
+    evaluationWindowMs: resolveNumber(input.evaluationWindowMs, 100, defaults.evaluationWindowMs),
+    minSampleFrames: Math.floor(resolveNumber(input.minSampleFrames, 2, defaults.minSampleFrames)),
+    initialTier: input.initialTier ?? defaults.initialTier,
+    autoRecover: input.autoRecover ?? defaults.autoRecover,
     recoveryFpsThreshold:
-      typeof input.recoveryFpsThreshold === 'number' &&
-      Number.isFinite(input.recoveryFpsThreshold)
+      typeof input.recoveryFpsThreshold === 'number' && Number.isFinite(input.recoveryFpsThreshold)
         ? input.recoveryFpsThreshold
         : undefined,
-    recoveryDelayMs:
-      typeof input.recoveryDelayMs === 'number' && Number.isFinite(input.recoveryDelayMs)
-        ? Math.max(0, input.recoveryDelayMs)
-        : DEFAULT_OPTIONS.recoveryDelayMs,
-    respectReducedMotion:
-      input.respectReducedMotion ?? DEFAULT_OPTIONS.respectReducedMotion,
+    recoveryDelayMs: resolveNumber(input.recoveryDelayMs, 0, defaults.recoveryDelayMs),
+    respectReducedMotion: input.respectReducedMotion ?? defaults.respectReducedMotion,
   }
 }
 
-/**
- * Framework-agnostic state machine that monitors live frame stability via
- * PerfEngine and steps quality tiers down (or optionally recovers) with
- * hysteresis and cooldowns to prevent visual thrashing.
- */
 export class AdaptiveQualityController {
   private readonly engine: PerfEngineLike
   private readonly listeners = new Set<() => void>()
@@ -119,9 +79,11 @@ export class AdaptiveQualityController {
   constructor(options: AdaptiveQualityOptions = {}) {
     this.engine = options.engine ?? perfMonitor
     this.options = resolveOptions(options)
-    this.autoTier = this.computeStartingTier(this.engine.getSnapshot())
-    this.cachedState = this.buildState(this.engine.getSnapshot())
-    this.serverSnapshot = this.cachedState
+    const initialSnapshot = this.engine.getSnapshot()
+    const initialServerSnapshot = this.engine.getServerSnapshot?.() ?? initialSnapshot
+    this.autoTier = this.computeStartingTier(initialSnapshot)
+    this.cachedState = this.buildState(initialSnapshot)
+    this.serverSnapshot = this.buildState(initialServerSnapshot)
   }
 
   getSnapshot(): AdaptiveQualityState {
@@ -139,10 +101,6 @@ export class AdaptiveQualityController {
     }
   }
 
-  /**
-   * Connects to the telemetry engine (ref-counted so React StrictMode
-   * mount/unmount cycles cleanly re-attach without leaking).
-   */
   connect(): () => void {
     let disconnected = false
     this.connectionCount += 1
@@ -242,16 +200,15 @@ export class AdaptiveQualityController {
       this.syncState(this.engine.getSnapshot())
       return
     }
-
-    if (event.type !== 'frame') return
-    this.evaluateFrame(event.timestamp, event.deltaMs)
+    if (event.type === 'frame') {
+      this.evaluateFrame(event.timestamp, event.deltaMs)
+    }
   }
 
   private evaluateFrame(timestamp: number, deltaMs: number): void {
-    if (this.manualTier !== null || !this.options.autoDowngrade) {
-      return
-    }
+    if (this.manualTier !== null || !this.options.autoDowngrade) return
 
+    // Hold hysteresis cooldown after transitions to avoid visual thrashing.
     if (
       this.lastTransitionAt !== null &&
       timestamp - this.lastTransitionAt < this.options.cooldownMs
@@ -266,83 +223,67 @@ export class AdaptiveQualityController {
       this.recentFrames.length > 3 &&
       timestamp - this.recentFrames[0].timestamp > this.options.evaluationWindowMs
     ) {
-      const removed = this.recentFrames.shift()!
-      this.recentSumMs -= removed.deltaMs
+      this.recentSumMs -= this.recentFrames.shift()!.deltaMs
     }
 
     const sampleCount = this.recentFrames.length
-    const spanMs =
-      sampleCount > 1 ? timestamp - this.recentFrames[0].timestamp : 0
-
+    const spanMs = sampleCount > 1 ? timestamp - this.recentFrames[0].timestamp : 0
     const hasEnoughSamples =
       sampleCount >= this.options.minSampleFrames ||
       (sampleCount >= 3 && spanMs >= this.options.evaluationWindowMs)
 
-    if (!hasEnoughSamples || this.recentSumMs <= 0) {
-      return
-    }
+    if (!hasEnoughSamples || this.recentSumMs <= 0) return
 
-    const recentAvgFrameTime = this.recentSumMs / sampleCount
-    const recentFps = 1000 / recentAvgFrameTime
-    const currentRank = tierRank(this.autoTier)
+    const recentFps = 1000 / (this.recentSumMs / sampleCount)
+    const currentRank = QUALITY_TIERS.indexOf(this.autoTier)
 
     if (recentFps < this.options.minFpsThreshold) {
       this.aboveRecoverySince = null
-      if (currentRank < QUALITY_TIERS.length - 1) {
-        if (this.belowThresholdSince === null) {
-          this.belowThresholdSince = timestamp
-        } else if (
-          timestamp - this.belowThresholdSince >=
-          this.options.downgradeDelayMs
-        ) {
-          this.autoTier = QUALITY_TIERS[currentRank + 1]
-          this.downgradeCount += 1
-          this.lastTransitionAt = timestamp
-          this.resetEvaluationWindow()
-          const fresh = this.engine.flush()
-          this.syncState(fresh)
-        }
+      if (currentRank >= QUALITY_TIERS.length - 1) return
+
+      if (this.belowThresholdSince === null) {
+        this.belowThresholdSince = timestamp
+      } else if (timestamp - this.belowThresholdSince >= this.options.downgradeDelayMs) {
+        this.commitTierTransition(QUALITY_TIERS[currentRank + 1], timestamp, true)
       }
       return
     }
 
     this.belowThresholdSince = null
+    if (!this.options.autoRecover) return
 
-    if (this.options.autoRecover) {
-      const baselineRank = tierRank(this.computeStartingTier(this.engine.getSnapshot()))
-      if (currentRank > baselineRank) {
-        const refreshHz = this.engine.getSnapshot().refreshRateHz || 60
-        const defaultRecovery = Math.min(
-          refreshHz * 0.95,
-          this.options.minFpsThreshold + 8,
-        )
-        const recoveryThreshold =
-          this.options.recoveryFpsThreshold ??
-          Math.max(this.options.minFpsThreshold + 1, defaultRecovery)
+    const baselineRank = QUALITY_TIERS.indexOf(this.computeStartingTier(this.engine.getSnapshot()))
+    if (currentRank <= baselineRank) return
 
-        if (recentFps >= recoveryThreshold) {
-          if (this.aboveRecoverySince === null) {
-            this.aboveRecoverySince = timestamp
-          } else if (
-            timestamp - this.aboveRecoverySince >=
-            this.options.recoveryDelayMs
-          ) {
-            this.autoTier = QUALITY_TIERS[currentRank - 1]
-            this.lastTransitionAt = timestamp
-            this.resetEvaluationWindow()
-            const fresh = this.engine.flush()
-            this.syncState(fresh)
-          }
-        } else {
-          this.aboveRecoverySince = null
-        }
-      }
+    const refreshHz = this.engine.getSnapshot().refreshRateHz || DEFAULT_REFRESH_RATE_HZ
+    const defaultRecovery = Math.min(refreshHz * 0.95, this.options.minFpsThreshold + 8)
+    const recoveryThreshold =
+      this.options.recoveryFpsThreshold ?? Math.max(this.options.minFpsThreshold + 1, defaultRecovery)
+
+    if (recentFps < recoveryThreshold) {
+      this.aboveRecoverySince = null
+      return
     }
+
+    if (this.aboveRecoverySince === null) {
+      this.aboveRecoverySince = timestamp
+    } else if (timestamp - this.aboveRecoverySince >= this.options.recoveryDelayMs) {
+      this.commitTierTransition(QUALITY_TIERS[currentRank - 1], timestamp, false)
+    }
+  }
+
+  private commitTierTransition(nextTier: QualityTier, timestamp: number, isDowngrade: boolean): void {
+    this.autoTier = nextTier
+    if (isDowngrade) this.downgradeCount += 1
+    this.lastTransitionAt = timestamp
+    this.resetEvaluationWindow()
+    this.syncState(this.engine.flush())
   }
 
   private buildState(metrics: PerfSnapshot): AdaptiveQualityState {
     const qualityTier = this.manualTier ?? this.autoTier
-    const isDegraded = tierRank(qualityTier) > tierRank(this.options.initialTier)
+    const isDegraded =
+      QUALITY_TIERS.indexOf(qualityTier) > QUALITY_TIERS.indexOf(this.options.initialTier)
     return {
       qualityTier,
       isDegraded,

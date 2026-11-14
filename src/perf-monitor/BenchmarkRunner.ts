@@ -1,5 +1,10 @@
+import {
+  DEFAULT_REFRESH_RATE_HZ,
+  DEFAULT_TIMED_DURATION_MS,
+  MAX_PHASE_FRAME_SAMPLES,
+} from './constants'
 import { perfMonitor } from './PerfEngine'
-import { CustomMetricTracker, computePercentile, round2 } from './stats'
+import { CustomMetricTracker, clamp, computePercentile, round2 } from './stats'
 import type {
   BenchmarkAssessment,
   BenchmarkDelta,
@@ -15,9 +20,6 @@ import type {
   PerfSnapshot,
   ResourceCostRating,
 } from './types'
-
-const MAX_PHASE_FRAME_SAMPLES = 36_000
-const DEFAULT_TIMED_DURATION_MS = 3000
 
 interface ActivePhaseSession {
   phase: BenchmarkPhase
@@ -54,18 +56,17 @@ function buildAssessment(
   active: BenchmarkPhaseSnapshot,
   delta: BenchmarkDelta,
 ): BenchmarkAssessment {
-  const budgetMs = active.frameBudgetMs > 0 ? active.frameBudgetMs : 1000 / 60
+  const budgetMs =
+    active.frameBudgetMs > 0 ? active.frameBudgetMs : 1000 / DEFAULT_REFRESH_RATE_HZ
 
   const fpsDropPct =
     baseline.fps > 0 ? Math.max(0, ((baseline.fps - active.fps) / baseline.fps) * 100) : 0
   const fpsPenalty = Math.min(35, fpsDropPct * 1.1)
-
   const avgFramePenalty = Math.min(20, (Math.max(0, delta.frameTimeDeltaMs) / budgetMs) * 20)
 
   const p95Anchor = Math.max(baseline.p95FrameTimeMs, budgetMs)
   const p95OverRatio = Math.max(0, (active.p95FrameTimeMs - p95Anchor) / budgetMs)
   const p95Penalty = Math.min(15, p95OverRatio * 12)
-
   const jankPenalty = Math.min(20, Math.max(0, delta.jankIncreasePercent) * 1.2)
 
   const activeDurationSec = active.durationMs > 0 ? active.durationMs / 1000 : 1
@@ -73,7 +74,7 @@ function buildAssessment(
   const tbtPenalty = Math.min(30, tbtRateMsPerSec * 0.12)
 
   const totalPenalty = fpsPenalty + avgFramePenalty + p95Penalty + jankPenalty + tbtPenalty
-  const score = Math.round(Math.max(0, Math.min(100, 100 - totalPenalty)))
+  const score = Math.round(clamp(100 - totalPenalty, 0, 100))
   const costRating = classifyCostRating(score)
 
   const summary =
@@ -83,11 +84,7 @@ function buildAssessment(
     `jank ${formatSigned(delta.jankIncreasePercent, '%')}, ` +
     `TBT ${formatSigned(delta.mainThreadBlockingDeltaMs, 'ms')}.`
 
-  return {
-    score,
-    costRating,
-    summary,
-  }
+  return { score, costRating, summary }
 }
 
 function buildCustomMetricsDelta(
@@ -122,10 +119,6 @@ function buildCustomMetricsDelta(
   return delta
 }
 
-/**
- * A/B benchmarking utility for measuring the exact frame-timing, jank,
- * main-thread blocking, and memory impact of UI effects against a baseline.
- */
 export class BenchmarkRunner {
   private readonly engine: PerfEngineLike
   private readonly label?: string
@@ -143,9 +136,7 @@ export class BenchmarkRunner {
 
   getState(): BenchmarkState {
     if (!this.activeSession) return 'idle'
-    return this.activeSession.phase === 'baseline'
-      ? 'recording-baseline'
-      : 'recording-active'
+    return this.activeSession.phase === 'baseline' ? 'recording-baseline' : 'recording-active'
   }
 
   hasBaseline(): boolean {
@@ -332,10 +323,6 @@ export class BenchmarkRunner {
     })
   }
 
-  /**
-   * Captures a point-in-time phase snapshot directly from an already-running
-   * telemetry snapshot (useful for manual snapshot workflows).
-   */
   captureSnapshot(
     phase: BenchmarkPhase,
     snapshot: PerfSnapshot = this.engine.flush(),
@@ -406,38 +393,24 @@ export class BenchmarkRunner {
     const active = this.activeSnapshot
     const envSnap = this.latestEngineSnapshot
 
-    const fpsDelta = round2(active.fps - baseline.fps)
-    const fpsDeltaPercent =
-      baseline.fps > 0 ? round2(((active.fps - baseline.fps) / baseline.fps) * 100) : 0
-    const frameTimeDeltaMs = round2(active.avgFrameTimeMs - baseline.avgFrameTimeMs)
-    const p95FrameTimeDeltaMs = round2(active.p95FrameTimeMs - baseline.p95FrameTimeMs)
-    const p99FrameTimeDeltaMs = round2(active.p99FrameTimeMs - baseline.p99FrameTimeMs)
-    const jankIncreasePercent = round2(active.jankPercent - baseline.jankPercent)
-    const droppedFramesDelta = active.droppedFrames - baseline.droppedFrames
-    const mainThreadBlockingDeltaMs = round2(
-      active.totalBlockingTimeMs - baseline.totalBlockingTimeMs,
-    )
-    const longTaskCountDelta = active.longTaskCount - baseline.longTaskCount
-    const memoryDeltaMb =
-      baseline.jsHeapEndMb !== null && active.jsHeapEndMb !== null
-        ? round2(active.jsHeapEndMb - baseline.jsHeapEndMb)
-        : null
-
     const delta: BenchmarkDelta = {
-      fpsDelta,
-      fpsDeltaPercent,
-      frameTimeDeltaMs,
-      p95FrameTimeDeltaMs,
-      p99FrameTimeDeltaMs,
-      jankIncreasePercent,
-      droppedFramesDelta,
-      mainThreadBlockingDeltaMs,
-      longTaskCountDelta,
-      memoryDeltaMb,
-      customMetricsDelta: buildCustomMetricsDelta(
-        baseline.customMetrics,
-        active.customMetrics,
+      fpsDelta: round2(active.fps - baseline.fps),
+      fpsDeltaPercent:
+        baseline.fps > 0 ? round2(((active.fps - baseline.fps) / baseline.fps) * 100) : 0,
+      frameTimeDeltaMs: round2(active.avgFrameTimeMs - baseline.avgFrameTimeMs),
+      p95FrameTimeDeltaMs: round2(active.p95FrameTimeMs - baseline.p95FrameTimeMs),
+      p99FrameTimeDeltaMs: round2(active.p99FrameTimeMs - baseline.p99FrameTimeMs),
+      jankIncreasePercent: round2(active.jankPercent - baseline.jankPercent),
+      droppedFramesDelta: active.droppedFrames - baseline.droppedFrames,
+      mainThreadBlockingDeltaMs: round2(
+        active.totalBlockingTimeMs - baseline.totalBlockingTimeMs,
       ),
+      longTaskCountDelta: active.longTaskCount - baseline.longTaskCount,
+      memoryDeltaMb:
+        baseline.jsHeapEndMb !== null && active.jsHeapEndMb !== null
+          ? round2(active.jsHeapEndMb - baseline.jsHeapEndMb)
+          : null,
+      customMetricsDelta: buildCustomMetricsDelta(baseline.customMetrics, active.customMetrics),
     }
 
     const assessment = buildAssessment(baseline, active, delta)
@@ -530,8 +503,8 @@ export class BenchmarkRunner {
       frameCount,
       fps: round2(fps),
       avgFrameTimeMs: round2(avgFrameTimeMs),
-      p95FrameTimeMs: round2(p95FrameTimeMs),
-      p99FrameTimeMs: round2(p99FrameTimeMs),
+      p95FrameTimeMs,
+      p99FrameTimeMs,
       minFrameTimeMs:
         frameCount > 0 && Number.isFinite(session.minFrameTimeMs)
           ? round2(session.minFrameTimeMs)
