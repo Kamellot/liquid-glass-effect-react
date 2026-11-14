@@ -1,5 +1,5 @@
 {
-  "name": "@kamil-zubrzycki/glass",
+  "name": "liquid-glass-effect-react",
   "version": "0.1.0",
   "description": "SSR-safe Liquid Glass React UI primitive powered by a 1/4-quadrant SDF WebGL/Canvas refraction engine and pure CSS optics.",
   "license": "MIT",
@@ -10,9 +10,6 @@
     "webgl",
     "ui"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "type": "module",
   "sideEffects": [
     "**/*.css"
