@@ -25,11 +25,7 @@ yarn add liquid-glass-react
 
 **Peer dependencies:** `react` (`^18.0.0 || ^19.0.0`) and `react-dom` (`^18.0.0 || ^19.0.0`).
 
-Import the component stylesheet once in your application entry point:
-
-```ts
-import 'liquid-glass-react/styles.css'
-```
+Styles are imported automatically by the package entry (`liquid-glass-react/styles.css` is also exported if your setup requires an explicit stylesheet import).
 
 ---
 
@@ -42,7 +38,6 @@ Drop `<LiquidGlass />` inside an existing container that already defines its own
 ```tsx
 import { useRef } from 'react'
 import { LiquidGlass } from 'liquid-glass-react'
-import 'liquid-glass-react/styles.css'
 
 export function FloatingBar() {
   const sceneRef = useRef<HTMLDivElement>(null)
@@ -83,7 +78,6 @@ Use `mode="wrapper"` when `<LiquidGlass />` should act as the container itself, 
 ```tsx
 import { useRef } from 'react'
 import { LiquidGlass } from 'liquid-glass-react'
-import 'liquid-glass-react/styles.css'
 
 export function SearchPill() {
   const sceneRef = useRef<HTMLElement>(null)
