@@ -24,6 +24,7 @@ export {
   DEFAULTS,
   FIGMA_MATERIAL_DEFAULTS,
   type DisplacementMapInfo,
+  type LiquidGlassLightMode,
   type LiquidGlassMode,
   type LiquidGlassOptions,
   type LiquidGlassProps,

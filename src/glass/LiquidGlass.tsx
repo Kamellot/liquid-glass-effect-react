@@ -69,6 +69,7 @@ export const LiquidGlass = memo(function LiquidGlass({
   dispersion = DEFAULTS.dispersion,
   frost = DEFAULTS.frost,
   splay = DEFAULTS.splay,
+  lightMode = DEFAULTS.lightMode,
   lightAngle = DEFAULTS.lightAngle,
   lightIntensity = DEFAULTS.lightIntensity,
   glow = DEFAULTS.glow,
@@ -541,6 +542,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       ref={rootRef}
       data-lg-root=""
       data-lg-engine={targetEl ? 'canvas-sdf' : 'css-optics'}
+      data-lg-light-mode={lightMode}
       className={rootClassName}
       style={rootStyle}
       aria-hidden={isLayer ? 'true' : undefined}
@@ -555,7 +557,7 @@ export const LiquidGlass = memo(function LiquidGlass({
       {frost > 0.05 && <div className="lg-frost" aria-hidden="true" />}
       {fillLayerStyle && <div className="lg-fill" style={fillLayerStyle} aria-hidden="true" />}
 
-      {lightIntensity > 0.05 && <div className="lg-glow" aria-hidden="true" />}
+      {glow > 0.05 && <div className="lg-glow" aria-hidden="true" />}
       {lightIntensity > 0.05 && <div className="lg-rim" aria-hidden="true" />}
 
       {hasChildren && <div className="lg-content">{children}</div>}

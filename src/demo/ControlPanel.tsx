@@ -51,56 +51,92 @@ function SliderRow({
         onToggle,
 }: Props) {
   const setParam = useCallback(
-    (key: keyof DemoParams) => (val: number) => onChange({[key]: val }),
-      [onChange],
-      )
-      const half = Math.ceil(SLIDERS.length / 2)
-      const left = SLIDERS.slice(0, half)
-      const right = SLIDERS.slice(half)
+    (key: SliderDef['key']) => (val: number) => onChange({ [key]: val }),
+    [onChange],
+  )
+  const isNaturalLight = params.lightMode === 'natural'
 
-      return (
-      <aside className={'cp' + (open ? '' : ' cp--closed')} aria-label="Liquid glass inspector">
-        <div className="cp-head">
-          <div className="cp-presets" role="group" aria-label="Optical presets">
-            {PRESETS.map((preset) => (
+  const half = Math.ceil(SLIDERS.length / 2)
+  const left = SLIDERS.slice(0, half)
+  const right = SLIDERS.slice(half)
+
+  return (
+    <aside className={'cp' + (open ? '' : ' cp--closed')} aria-label="Liquid glass inspector">
+      <div className="cp-head">
+        <div className="cp-presets" role="group" aria-label="Optical presets">
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              className="chip"
+              onClick={() => onChange(preset.params)}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+        <div className="cp-head-actions">
+          {open && (
+            <div className="cp-light-switch" role="group" aria-label="Lighting mode">
               <button
-                key={preset.name}
                 type="button"
-                className="chip"
-                onClick={() => onChange(preset.params)}
+                className={'seg' + (isNaturalLight ? ' seg--active' : '')}
+                aria-pressed={isNaturalLight}
+                onClick={() => onChange({ lightMode: 'natural' })}
               >
-                {preset.name}
+                Natural
               </button>
-            ))}
-          </div>
+              <button
+                type="button"
+                className={'seg' + (!isNaturalLight ? ' seg--active' : '')}
+                aria-pressed={!isNaturalLight}
+                onClick={() => onChange({ lightMode: 'custom' })}
+              >
+                Custom
+              </button>
+            </div>
+          )}
           <button type="button" className="cp-toggle" onClick={onToggle} aria-expanded={open}>
             {open ? 'Hide' : 'Controls'}
           </button>
         </div>
+      </div>
 
-        {open && (
-          <>
-            <div className="cp-grid">
-              <div className="cp-col">
-                {left.map((def) => (
-                  <SliderRow key={def.key} def={def} value={params[def.key]} onChange={setParam(def.key)} />
-                ))}
-              </div>
-              <div className="cp-col">
-                {right.map((def) => (
-                <SliderRow key={def.key} def={def} value={params[def.key]} onChange={setParam(def.key)} />
-                ))}
-              </div>
+      {open && (
+        <>
+          <div className="cp-grid">
+            <div className="cp-col">
+              {left.map((def) => (
+                <SliderRow
+                  key={def.key}
+                  def={def}
+                  value={params[def.key]}
+                  disabled={isNaturalLight && def.key === 'lightAngle'}
+                  onChange={setParam(def.key)}
+                />
+              ))}
             </div>
+            <div className="cp-col">
+              {right.map((def) => (
+                <SliderRow
+                  key={def.key}
+                  def={def}
+                  value={params[def.key]}
+                  disabled={isNaturalLight && def.key === 'lightAngle'}
+                  onChange={setParam(def.key)}
+                />
+              ))}
+            </div>
+          </div>
 
-            <div className="cp-foot">
-              <span className="cp-stat">
-                engine: <b>Custom 1/4-SDF Canvas + CSS Optics</b>
-              </span>
-              <span className="cp-stat">{stats}</span>
-            </div>
-          </>
-        )}
-      </aside>
-      )
+          <div className="cp-foot">
+            <span className="cp-stat">
+              engine: <b>Custom 1/4-SDF Canvas + CSS Optics</b>
+            </span>
+            <span className="cp-stat">{stats}</span>
+          </div>
+        </>
+      )}
+    </aside>
+  )
 }

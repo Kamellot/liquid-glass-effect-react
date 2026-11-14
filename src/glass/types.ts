@@ -17,11 +17,13 @@ export interface LiquidGlassOptions {
   frost?: number
   /** Falloff smoothness: how gently the bent rim eases into the flat center (0–100, default 20). */
   splay?: number
-  /** Light source direction in degrees, 0 = light from the top (0–360, default 0). */
+  /** Lighting mode: 'natural' (default top & bottom white border glow) or 'custom' (directional angle, intensity, glow). */
+  lightMode?: LiquidGlassLightMode
+  /** Light source direction in degrees for 'custom' mode, 0 = top (0–360, default 0). */
   lightAngle?: number
-  /** Brightness of the directional specular rim (0–100, default 40). */
+  /** Brightness of the specular rim (0–100, default 40). */
   lightIntensity?: number
-  /** Natural white inner glow / volumetric specular bloom inside the glass (0–100, default 28). */
+  /** Natural white inner glow / volumetric specular bloom (0–100, default 28). */
   glow?: number
   /**
    * Corner radius. Number = px, string = any CSS radius (`'24px'`, `'50%'`).
@@ -49,6 +51,7 @@ export interface LiquidGlassOptions {
 }
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
+export type LiquidGlassLightMode = 'natural' | 'custom'
 
 export interface DisplacementMapInfo {
   /** Shared cached bevel field revision identifier (e.g. `lg-b1`), or `null` when refraction is 0. */
@@ -94,6 +97,7 @@ export const DEFAULTS: Required<
   dispersion: 20,
   frost: 6,
   splay: 20,
+  lightMode: 'natural',
   lightAngle: 0,
   lightIntensity: 40,
   glow: 28,

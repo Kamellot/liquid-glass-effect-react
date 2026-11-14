@@ -968,6 +968,24 @@ button {
   flex: none;
 }
 
+.cp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.cp-light-switch {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.seg--active {
+  background: rgb(143 139 247 / 0.24);
+  border-color: rgb(143 139 247 / 0.6);
+  color: #fff;
+}
+
 .cp-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

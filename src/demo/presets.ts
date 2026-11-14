@@ -1,4 +1,4 @@
-import { DEFAULT_LENS_SIZE, DEFAULTS } from '../glass'
+import { DEFAULT_LENS_SIZE, DEFAULTS, type LiquidGlassLightMode } from '../glass'
 
 export interface DemoParams {
   size: number
@@ -7,6 +7,7 @@ export interface DemoParams {
   dispersion: number
   frost: number
   splay: number
+  lightMode: LiquidGlassLightMode
   lightAngle: number
   lightIntensity: number
   glow: number
@@ -18,7 +19,7 @@ export const DEFAULT_PARAMS: DemoParams = {
 }
 
 export interface SliderDef {
-  key: keyof DemoParams
+  key: Exclude<keyof DemoParams, 'lightMode'>
   label: string
   min: number
   max: number
