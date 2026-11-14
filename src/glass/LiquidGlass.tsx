@@ -19,6 +19,7 @@ import {
   type BevelField,
 } from './refractionEngine'
 import { isWebGLRefractionAvailable } from './webglRefraction'
+import { useLiquidGlassConfig } from './LiquidGlassContext'
 import { DEFAULTS, FIGMA_MATERIAL_DEFAULTS, type LiquidGlassProps } from './types'
 import './LiquidGlass.css'
 
@@ -63,27 +64,46 @@ function measureElementBox(el: HTMLElement): BoxMetrics {
 
 export const LiquidGlass = memo(function LiquidGlass({
   mode = 'layer',
-  size,
-  refraction = DEFAULTS.refraction,
-  depth = DEFAULTS.depth,
-  dispersion = DEFAULTS.dispersion,
-  frost = DEFAULTS.frost,
-  splay = DEFAULTS.splay,
-  lightMode = DEFAULTS.lightMode,
-  lightAngle = DEFAULTS.lightAngle,
-  lightIntensity = DEFAULTS.lightIntensity,
-  glow = DEFAULTS.glow,
-  borderRadius: borderRadiusProp,
-  tint,
-  fill,
-  fillOverlay,
-  shadow,
+  ignoreGlobal = false,
+  size: sizeProp,
+  refraction: refractionProp,
+  depth: depthProp,
+  dispersion: dispersionProp,
+  frost: frostProp,
+  splay: splayProp,
+  lightMode: lightModeProp,
+  lightAngle: lightAngleProp,
+  lightIntensity: lightIntensityProp,
+  glow: glowProp,
+  borderRadius: borderRadiusPropProp,
+  tint: tintProp,
+  fill: fillProp,
+  fillOverlay: fillOverlayProp,
+  shadow: shadowProp,
   refractionTarget,
   children,
   className,
   style,
   onMapUpdate,
 }: LiquidGlassProps) {
+  const globalConfig = useLiquidGlassConfig()
+  const activeGlobal = ignoreGlobal ? undefined : globalConfig
+
+  const size = sizeProp ?? activeGlobal?.size
+  const refraction = refractionProp ?? activeGlobal?.refraction ?? DEFAULTS.refraction
+  const depth = depthProp ?? activeGlobal?.depth ?? DEFAULTS.depth
+  const dispersion = dispersionProp ?? activeGlobal?.dispersion ?? DEFAULTS.dispersion
+  const frost = frostProp ?? activeGlobal?.frost ?? DEFAULTS.frost
+  const splay = splayProp ?? activeGlobal?.splay ?? DEFAULTS.splay
+  const lightMode = lightModeProp ?? activeGlobal?.lightMode ?? DEFAULTS.lightMode
+  const lightAngle = lightAngleProp ?? activeGlobal?.lightAngle ?? DEFAULTS.lightAngle
+  const lightIntensity = lightIntensityProp ?? activeGlobal?.lightIntensity ?? DEFAULTS.lightIntensity
+  const glow = glowProp ?? activeGlobal?.glow ?? DEFAULTS.glow
+  const borderRadiusProp = borderRadiusPropProp ?? activeGlobal?.borderRadius
+  const tint = tintProp ?? activeGlobal?.tint
+  const fill = fillProp ?? activeGlobal?.fill
+  const fillOverlay = fillOverlayProp ?? activeGlobal?.fillOverlay
+  const shadow = shadowProp ?? activeGlobal?.shadow
   const rootRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fieldRef = useRef<BevelField | null>(null)

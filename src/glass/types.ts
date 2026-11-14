@@ -52,6 +52,7 @@ export interface LiquidGlassOptions {
 
 export type LiquidGlassMode = 'layer' | 'wrapper'
 export type LiquidGlassLightMode = 'natural' | 'custom'
+export type LiquidGlassGlobalConfig = LiquidGlassOptions
 
 export interface DisplacementMapInfo {
   /** Shared cached bevel field revision identifier (e.g. `lg-b1`), or `null` when refraction is 0. */
@@ -66,6 +67,8 @@ export interface DisplacementMapInfo {
 export interface LiquidGlassProps extends LiquidGlassOptions {
   /** Integration pattern: Apple Material 'layer' (default) or 'wrapper'. */
   mode?: LiquidGlassMode
+  /** Skip `<LiquidGlassProvider>` global configuration for this instance and use local props + built-in defaults only. */
+  ignoreGlobal?: boolean
   /** Target layer element/ref for universal cross-browser Canvas SDF refraction. */
   refractionTarget?: RefObject<HTMLElement | null> | HTMLElement | null
   /** Optional children (used in 'wrapper' mode). */

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "esbuild tests/perf-monitor.test.ts --bundle --platform=node --format=cjs --external:react --external:react-dom --external:react-dom/server --outfile=dist/.test/perf-monitor.test.cjs && node --test dist/.test/perf-monitor.test.cjs"
+    "test": "esbuild tests/perf-monitor.test.ts tests/liquid-glass-config.test.ts --bundle --platform=node --format=cjs --loader:.css=empty --external:react --external:react-dom --external:react-dom/server --outdir=dist/.test --out-extension:.js=.cjs && node --test dist/.test/*.cjs"
   },
   "dependencies": {
     "react": "^19.0.0",

@@ -1,5 +1,10 @@
 export { LiquidGlass } from './LiquidGlass'
 export {
+  LiquidGlassProvider,
+  useLiquidGlassConfig,
+  type LiquidGlassProviderProps,
+} from './LiquidGlassContext'
+export {
   getTargetSnapshot,
   subscribeTargetSnapshot,
   type TargetSnapshot,
@@ -24,6 +29,7 @@ export {
   DEFAULTS,
   FIGMA_MATERIAL_DEFAULTS,
   type DisplacementMapInfo,
+  type LiquidGlassGlobalConfig,
   type LiquidGlassLightMode,
   type LiquidGlassMode,
   type LiquidGlassOptions,
