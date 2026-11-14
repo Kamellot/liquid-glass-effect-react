@@ -1,7 +1,18 @@
 {
-  "name": "liquid-glass-react",
+  "name": "@kamil-zubrzycki/glass",
   "version": "0.1.0",
   "description": "SSR-safe Liquid Glass React UI primitive powered by a 1/4-quadrant SDF WebGL/Canvas refraction engine and pure CSS optics.",
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "liquid-glass",
+    "glassmorphism",
+    "webgl",
+    "ui"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "sideEffects": [
     "**/*.css"
@@ -28,6 +39,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "prepublishOnly": "npm run build:lib && npm test",
     "preview": "vite preview",
     "test": "esbuild tests/perf-monitor.test.ts tests/liquid-glass-config.test.ts --bundle --platform=node --format=cjs --loader:.css=empty --external:react --external:react-dom --external:react-dom/server --outdir=dist/.test --out-extension:.js=.cjs && node --test dist/.test/*.cjs"
   },
