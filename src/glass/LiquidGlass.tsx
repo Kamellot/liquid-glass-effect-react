@@ -88,6 +88,15 @@ export const LiquidGlass = memo(function LiquidGlass({
   const outImageRef = useRef<ImageData | null>(null)
   const parentTintRef = useRef<string>('')
   const isVisibleRef = useRef<boolean>(true)
+  const lastDrawRef = useRef<{
+    version: number
+    offsetX: number
+    offsetY: number
+    refraction: number
+    dispersion: number
+    tint: string
+    fieldHash: string
+  } | null>(null)
   const opticsRef = useRef({ refraction, dispersion })
   opticsRef.current = { refraction, dispersion }
 
@@ -140,19 +149,50 @@ export const LiquidGlass = memo(function LiquidGlass({
     const field = fieldRef.current
     if (!canvas || !root || !field || !targetEl) return
 
+    const checkVis = (
+      root as HTMLElement & {
+        checkVisibility?: (opts?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean
+      }
+    ).checkVisibility
+    if (typeof checkVis === 'function' && !checkVis.call(root, { checkOpacity: true, checkVisibilityCSS: true })) {
+      return
+    }
+
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
-    if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
-    if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
 
     const { refraction: curRefraction, dispersion: curDispersion } = opticsRef.current
     const snapshot = getTargetSnapshot(targetEl, root)
     if (!snapshot || curRefraction <= 0.01) {
+      if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
+      if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+      lastDrawRef.current = null
       notifyGlassRedrawn(targetEl, root)
       return
     }
+
+    const rootRect = root.getBoundingClientRect()
+    const targetRect = targetEl.getBoundingClientRect()
+    const offsetX = rootRect.left - targetRect.left
+    const offsetY = rootRect.top - targetRect.top
+
+    const prev = lastDrawRef.current
+    if (
+      prev &&
+      prev.version === snapshot.version &&
+      Math.abs(prev.offsetX - offsetX) < 0.25 &&
+      Math.abs(prev.offsetY - offsetY) < 0.25 &&
+      prev.refraction === curRefraction &&
+      prev.dispersion === curDispersion &&
+      prev.tint === parentTintRef.current &&
+      prev.fieldHash === field.hash
+    ) {
+      return
+    }
+
+    if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
+    if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
 
     if (
       !isWebGLRefractionAvailable() &&
@@ -162,11 +202,6 @@ export const LiquidGlass = memo(function LiquidGlass({
     ) {
       outImageRef.current = ctx.createImageData(field.bufWidth, field.bufHeight)
     }
-
-    const rootRect = root.getBoundingClientRect()
-    const targetRect = targetEl.getBoundingClientRect()
-    const offsetX = rootRect.left - targetRect.left
-    const offsetY = rootRect.top - targetRect.top
 
     renderRefractedBevel(
       ctx,
@@ -179,6 +214,15 @@ export const LiquidGlass = memo(function LiquidGlass({
       curDispersion,
       parentTintRef.current,
     )
+    lastDrawRef.current = {
+      version: snapshot.version,
+      offsetX,
+      offsetY,
+      refraction: curRefraction,
+      dispersion: curDispersion,
+      tint: parentTintRef.current,
+      fieldHash: field.hash,
+    }
     notifyGlassRedrawn(targetEl, root)
   }, [targetEl])
 

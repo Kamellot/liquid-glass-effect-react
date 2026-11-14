@@ -34,6 +34,8 @@ interface SnapshotEntry {
   version: number
   isVisible: boolean
   deferredWhileHidden: boolean
+  hasActiveVideo: boolean
+  lastVideoCaptureAt: number
   videoCallbacks: WeakSet<HTMLVideoElement>
   consumers: Map<() => void, ConsumerRecord>
   notifyingScopes: Set<HTMLElement>
@@ -49,6 +51,8 @@ interface SnapshotEntry {
 }
 
 const MAX_SNAP_DIM = 2200
+const MAX_VIDEO_SNAP_DIM = 960
+const MIN_VIDEO_CAPTURE_INTERVAL_MS = 32
 const OVERLAP_MARGIN = 64
 const assetCache = new Map<string, AssetEntry>()
 const snapshotRegistry = new Map<HTMLElement, SnapshotEntry>()
@@ -861,13 +865,32 @@ function paintElementTree(
   ctx.restore()
 }
 
+function hasVisibleConsumer(entry: SnapshotEntry): boolean {
+  if (entry.consumers.size === 0) return true
+  for (const rec of entry.consumers.values()) {
+    const el = rec.rootEl
+    if (!el) return true
+    const check = (
+      el as HTMLElement & {
+        checkVisibility?: (opts?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean
+      }
+    ).checkVisibility
+    if (typeof check !== 'function' || check.call(el, { checkOpacity: true, checkVisibilityCSS: true })) {
+      return true
+    }
+  }
+  return false
+}
+
 function isTargetActive(entry: SnapshotEntry): boolean {
   if (!entry.isVisible) return false
   if (typeof document !== 'undefined' && document.hidden) return false
+  if (!hasVisibleConsumer(entry)) return false
   return true
 }
 
 function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void {
+  entry.hasActiveVideo = true
   if (!isTargetActive(entry)) {
     entry.deferredWhileHidden = true
     return
@@ -882,6 +905,13 @@ function scheduleVideoFrame(entry: SnapshotEntry, video: HTMLVideoElement): void
       if (!snapshotRegistry.has(entry.target)) return
       if (!isTargetActive(entry)) {
         entry.deferredWhileHidden = true
+        return
+      }
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      if (now - entry.lastVideoCaptureAt < MIN_VIDEO_CAPTURE_INTERVAL_MS) {
+        if (!video.paused && !video.ended) {
+          scheduleVideoFrame(entry, video)
+        }
         return
       }
       scheduleSnapshotRefresh(entry)
@@ -1036,9 +1066,13 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
     return
   }
 
-  const rawDpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1
-  const capScale = Math.min(rawDpr, MAX_SNAP_DIM / cssW, MAX_SNAP_DIM / cssH)
-  const scale = Math.max(1, Math.min(rawDpr, capScale > 0 ? capScale : 1))
+  const maxScale = entry.hasActiveVideo ? 1 : 2
+  const maxDim = entry.hasActiveVideo ? MAX_VIDEO_SNAP_DIM : MAX_SNAP_DIM
+  const rawDpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, maxScale) : 1
+  const capScale = Math.min(rawDpr, maxDim / cssW, maxDim / cssH)
+  const scale = entry.hasActiveVideo
+    ? Math.max(0.5, Math.min(rawDpr, capScale > 0 ? capScale : 1))
+    : Math.max(1, Math.min(rawDpr, capScale > 0 ? capScale : 1))
   const bufW = Math.max(2, Math.round(cssW * scale))
   const bufH = Math.max(2, Math.round(cssH * scale))
 
@@ -1050,9 +1084,13 @@ function captureSnapshotNow(entry: SnapshotEntry): void {
   ctx.clearRect(0, 0, bufW, bufH)
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
 
+  entry.hasActiveVideo = false
   const schedule = () => scheduleSnapshotRefresh(entry)
   const onVideoPlaying = (video: HTMLVideoElement) => scheduleVideoFrame(entry, video)
   paintElementTree(ctx, entry.target, rect, scale, schedule, true, onVideoPlaying)
+  if (entry.hasActiveVideo) {
+    entry.lastVideoCaptureAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  }
 
   entry.version += 1
   entry.snapshot = createTargetSnapshot(entry.canvas, ctx, entry.version, bufW, bufH, scale, cssW, cssH)
@@ -1085,7 +1123,12 @@ function scheduleDirtyScopeNotify(entry: SnapshotEntry, scopeEl: HTMLElement): v
 
 export function getTargetSnapshot(target: HTMLElement, rootEl?: HTMLElement | null): TargetSnapshot | null {
   const entry = snapshotRegistry.get(target)
-  if (!entry || !entry.snapshot) return null
+  if (!entry) return null
+  if (entry.deferredWhileHidden && isTargetActive(entry)) {
+    entry.deferredWhileHidden = false
+    scheduleSnapshotRefresh(entry)
+  }
+  if (!entry.snapshot) return null
   const base = entry.snapshot
 
   if (!rootEl || entry.consumers.size <= 1) return base
@@ -1199,6 +1242,8 @@ export function subscribeTargetSnapshot(
       version: 0,
       isVisible: true,
       deferredWhileHidden: false,
+      hasActiveVideo: false,
+      lastVideoCaptureAt: 0,
       videoCallbacks: new WeakSet(),
       consumers: new Map(),
       notifyingScopes: new Set(),
