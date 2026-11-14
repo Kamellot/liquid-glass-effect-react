@@ -881,6 +881,73 @@ button {
   translate: -50% 0;
 }
 
+/* ── Bento background test section ──────────────────────────────────────── */
+.bento-section {
+  margin-top: 64px;
+}
+
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.bento-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  border-radius: 26px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.1);
+}
+
+.bento-tile--white {
+  background: #ffffff;
+  border-color: rgb(0 0 0 / 0.12);
+}
+
+.bento-tile--black {
+  background: #000000;
+}
+
+.bento-tile--white-abstract {
+  border-color: rgb(0 0 0 / 0.1);
+  background:
+    radial-gradient(circle at 18% 24%, rgb(56 189 248 / 0.45) 0%, transparent 46%),
+    radial-gradient(circle at 82% 28%, rgb(244 114 182 / 0.42) 0%, transparent 44%),
+    radial-gradient(circle at 52% 84%, rgb(167 139 250 / 0.48) 0%, transparent 50%),
+    repeating-linear-gradient(
+      128deg,
+      rgb(15 23 42 / 0.06) 0px,
+      rgb(15 23 42 / 0.06) 2px,
+      transparent 2px,
+      transparent 28px
+    ),
+    linear-gradient(135deg, #ffffff 0%, #eef2ff 50%, #fdf2f8 100%);
+}
+
+.bento-tile--dark-abstract {
+  background:
+    radial-gradient(circle at 20% 22%, rgb(56 189 248 / 0.55) 0%, transparent 45%),
+    radial-gradient(circle at 80% 26%, rgb(236 72 153 / 0.5) 0%, transparent 44%),
+    radial-gradient(circle at 50% 82%, rgb(99 102 241 / 0.55) 0%, transparent 52%),
+    repeating-linear-gradient(
+      128deg,
+      rgb(255 255 255 / 0.08) 0px,
+      rgb(255 255 255 / 0.08) 2px,
+      transparent 2px,
+      transparent 28px
+    ),
+    linear-gradient(135deg, #05070e 0%, #0d1326 52%, #170b24 100%);
+}
+
+@media (max-width: 720px) {
+  .bento-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .foot {
   margin-top: 38px;
   color: var(--muted);

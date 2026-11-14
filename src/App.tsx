@@ -1,6 +1,7 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import { getEngineStats, subscribeEngineStats, type EngineStats } from './glass'
 import { ControlPanel } from './demo/ControlPanel'
+import { BentoTestScene } from './demo/BentoTestScene'
 import { DockScene } from './demo/DockScene'
 import { Hero } from './demo/Hero'
 import { PerfObserverHud } from './demo/PerfObserverHud'
@@ -46,6 +47,7 @@ export default function App() {
         <Hero lens={lens} />
         <VideoScene glass={dock} />
         <DockScene glass={dock} />
+        <BentoTestScene glass={dock} />
 
         <footer className="foot">
           <p>
