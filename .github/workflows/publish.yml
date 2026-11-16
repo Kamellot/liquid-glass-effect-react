@@ -37,5 +37,7 @@ jobs:
         run: |
           if [ -n "${NPM_TOKEN:-}" ]; then
             echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+            npm publish --provenance --access public --loglevel verbose
+          else
+            npm stage publish --provenance --access public --loglevel verbose
           fi
-          npm publish --provenance --access public --loglevel verbose
