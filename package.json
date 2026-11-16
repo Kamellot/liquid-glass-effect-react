@@ -2,13 +2,13 @@
   "name": "liquid-glass-effect-react",
   "version": "0.1.2",
   "description": "SSR-safe Liquid Glass React UI primitive powered by a 1/4-quadrant SDF WebGL/Canvas refraction engine and pure CSS optics.",
-  "homepage": "https://github.com/Kamellot/light-liquid-react#readme",
+  "homepage": "https://github.com/Kamellot/liquid-glass-effect-react#readme",
   "bugs": {
-    "url": "https://github.com/Kamellot/light-liquid-react/issues"
+    "url": "https://github.com/Kamellot/liquid-glass-effect-react/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Kamellot/light-liquid-react.git"
+    "url": "git+https://github.com/Kamellot/liquid-glass-effect-react.git"
   },
   "license": "MIT",
   "keywords": [
