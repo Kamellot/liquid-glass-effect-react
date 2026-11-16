@@ -9,12 +9,15 @@ import type {
 } from './types'
 
 export const DEFAULT_LENS_SIZE = 166
+export const MIN_MAGNIFICATION = 0.25
+export const MAX_MAGNIFICATION = 4
 export const DEFAULT_GLASS_CONFIG = {
   refraction: 70,
   depth: 30,
   dispersion: 20,
   frost: 6,
   splay: 20,
+  magnification: 1,
   lightMode: 'natural' as const,
   lightAngle: 0,
   lightIntensity: 40,
@@ -126,7 +129,7 @@ type GlState = {
   gl: WebGLRenderingContext
   program: WebGLProgram
   dsProgram: WebGLProgram
-  u: (WebGLUniformLocation | null)[] // [p0,p1,p2,p3,p4,ti,sa,bs]
+  u: (WebGLUniformLocation | null)[] // [p0,p1,p2,p3,p4,ti,sa,im,bs]
   dsTexel: WebGLUniformLocation | null
   blurSizesBuf: Float32Array
   textures: WeakMap<HTMLCanvasElement, CachedSnapTex>
@@ -146,7 +149,7 @@ const DS_F_SRC =
 // Packed uniforms: p0=(w,h,hw,hh) p1=(bx,by,r,ed) p2=(splayExp,cornerExp,disp,spread) p3=(ox,oy,sw,sh) p4=(tx,ty,dpr,frostPx).
 const F_SRC =
   'precision highp float;varying vec2 v;' +
-  'uniform sampler2D s,b1,b2,b3,b4,b5;uniform vec2 bs[5];uniform vec4 p0,p1,p2,p3,p4,ti;uniform float sa;' +
+  'uniform sampler2D s,b1,b2,b3,b4,b5;uniform vec2 bs[5];uniform vec4 p0,p1,p2,p3,p4,ti;uniform float sa,im;' +
   'vec4 B(sampler2D t,vec2 u,vec2 z){vec2 i=1./z,c=u*z-.5,f=fract(c),f1=1.-f,f2=f*f;c-=f;' +
   'vec2 w0=f1*f1*f1/6.,w1=(4.-6.*f2+3.*f2*f)/6.,w3=f2*f/6.,g0=w0+w1,g1=1.-g0,lo=.5*i,hi=1.-lo,' +
   'h0=clamp((c-.5+w1/g0)*i,lo,hi),h1=clamp((c+1.5+w3/g1)*i,lo,hi);' +
@@ -159,17 +162,17 @@ const F_SRC =
   'a.rgb=clamp(mix(vec3(dot(a.rgb,vec3(.2126,.7152,.0722))),a.rgb,sa),0.,1.);return a;}' +
   'vec3 D(vec3 c,bool hf){if(ti.a>.001)c=mix(c,ti.rgb,ti.a);' +
   'return hf?clamp(c+(fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))))-.5)/255.,0.,1.):c;}' +
-  'void main(){bool hr=p1.w>.5&&p2.z>.001,hf=p4.w>.05;if(!hr&&!hf){gl_FragColor=vec4(0.);return;}' +
-  'vec2 fc=v*p0.xy,q=abs(fc-p0.zw)-p1.xy,o=max(q,0.);float ol=length(o),sd=ol+min(max(q.x,q.y),0.)-p1.z;' +
+  'void main(){bool hr=p1.w>.5&&p2.z>.001,hf=p4.w>.05,hm=abs(im-1.)>.001;if(!hr&&!hf&&!hm){gl_FragColor=vec4(0.);return;}' +
+  'vec2 fc=v*p0.xy,mc=p0.zw+(fc-p0.zw)*im,q=abs(fc-p0.zw)-p1.xy,o=max(q,0.);float ol=length(o),sd=ol+min(max(q.x,q.y),0.)-p1.z;' +
   'if(sd>.75){gl_FragColor=vec4(0.);return;}float oa=sd<=0.?1.:1.-sd/.75,di=sd<0.?-sd:0.;' +
-  'if(!hr||di>=p1.w){vec4 x=F(fc);gl_FragColor=vec4(D(x.rgb,hf),oa*x.a);return;}' +
+  'if(!hr||di>=p1.w){vec4 x=F(mc);gl_FragColor=vec4(D(x.rgb,hf),oa*x.a);return;}' +
   'if(oa<=.002){gl_FragColor=vec4(0.);return;}' +
   'float u=clamp(1.-di/p1.w,0.,1.),mg=(u<=0.?0.:u>=1.?1.:pow(u,p2.x))*oa,ux=0.,uy=0.;' +
   'if(o.x>0.&&o.y>0.){float n=p2.y-1.,gx=pow(o.x,n),gy=pow(o.y,n),gl=length(vec2(gx,gy));if(gl>0.){ux=gx/gl;uy=gy/gl;}}' +
   'else if(ol>1e-6){ux=o.x/ol;uy=o.y/ol;}else if(q.x>q.y)ux=1.;else if(q.y>q.x)uy=1.;else{ux=.70710678;uy=.70710678;}' +
   'vec2 dp=vec2(ux*(fc.x<p0.z?1.:-1.),uy*(fc.y<p0.w?1.:-1.))*(mg*p2.z);vec3 c;float a;' +
-  'if(p2.w<=.0005){vec4 x=F(fc+dp);c=x.rgb;a=x.a;}else{float m=p2.w,h=m*.5;' +
-  'vec4 x0=F(fc+dp*(1.-m)),x1=F(fc+dp*(1.-h)),x2=F(fc+dp),x3=F(fc+dp*(1.+h)),x4=F(fc+dp*(1.+m));' +
+  'if(p2.w<=.0005){vec4 x=F(mc+dp);c=x.rgb;a=x.a;}else{float m=p2.w,h=m*.5;' +
+  'vec4 x0=F(mc+dp*(1.-m)),x1=F(mc+dp*(1.-h)),x2=F(mc+dp),x3=F(mc+dp*(1.+h)),x4=F(mc+dp*(1.+m));' +
   'c=vec3(x0.r*.65+x1.r*.35,x1.g*.22+x2.g*.56+x3.g*.22,x3.b*.35+x4.b*.65);a=x2.a;}' +
   'gl_FragColor=vec4(D(c,hf),oa*a);}'
 
@@ -260,7 +263,7 @@ function initGlState(): GlState | null {
     gl,
     program,
     dsProgram,
-    u: ['p0', 'p1', 'p2', 'p3', 'p4', 'ti', 'sa', 'bs[0]'].map((n) => gl.getUniformLocation(program, n)),
+    u: ['p0', 'p1', 'p2', 'p3', 'p4', 'ti', 'sa', 'im', 'bs[0]'].map((n) => gl.getUniformLocation(program, n)),
     dsTexel: gl.getUniformLocation(dsProgram, 't'),
     blurSizesBuf: new Float32Array(PYRAMID_LEVELS * 2),
     textures: new WeakMap(),
@@ -374,6 +377,7 @@ function renderRefractedBevelWebGL(
   spread: number,
   tintRgba: [number, number, number, number] | null,
   frost: number,
+  invMag: number,
 ): boolean {
   const state = initGlState()
   if (!state) return false
@@ -445,7 +449,8 @@ function renderRefractedBevelWebGL(
   )
   gl.uniform4f(u[5], tintRgba?.[0] ?? 0, tintRgba?.[1] ?? 0, tintRgba?.[2] ?? 0, tintRgba?.[3] ?? 0)
   gl.uniform1f(u[6], 1 + (frostClamped * 0.8) / 100)
-  gl.uniform2fv(u[7], blurSizesBuf)
+  gl.uniform1f(u[7], invMag)
+  gl.uniform2fv(u[8], blurSizesBuf)
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
   targetCtx.clearRect(0, 0, bufWidth, bufHeight)
@@ -541,28 +546,19 @@ function makeCurve(w: number, h: number, r: number, depth: number, splay: number
   return { hw, hh, bx, by, borderRadius: r, effectiveDepth, splayExp, cornerExponent }
 }
 
-// Writes [dx, dy, outerAlpha] into `sdfScratch`; returns false in flat interior or outside AA rim.
-function evalBevelPixel(
-  cx: number,
+function evalBevelNormal(
+  qx: number,
   qy: number,
+  ox: number,
   oy: number,
   oyPow: number,
-  bx: number,
-  r: number,
+  outLen: number,
+  distIn: number,
   effDepth: number,
   splayExp: number,
   n1: number,
-): boolean {
-  const qx = cx - bx
-  const ox = qx > 0 ? qx : 0
-  const outLen = Math.hypot(ox, oy)
-  const qMax = qx > qy ? qx : qy
-  const sd = outLen + (qMax < 0 ? qMax : 0) - r
-  if (sd > 0.75) return false
-  const distIn = sd < 0 ? -sd : 0
-  if (distIn >= effDepth) return false
-
-  const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
+  outerAlpha: number,
+): void {
   const u = clamp01(1 - distIn / effDepth)
   const mag = (u <= 0 ? 0 : u >= 1 ? 1 : Math.pow(u, splayExp)) * outerAlpha
 
@@ -587,6 +583,30 @@ function evalBevelPixel(
   sdfScratch[0] = ux * mag
   sdfScratch[1] = uy * mag
   sdfScratch[2] = outerAlpha
+}
+
+// Writes [dx, dy, outerAlpha] into `sdfScratch`; returns false in flat interior or outside AA rim.
+function evalBevelPixel(
+  cx: number,
+  qy: number,
+  oy: number,
+  oyPow: number,
+  bx: number,
+  r: number,
+  effDepth: number,
+  splayExp: number,
+  n1: number,
+): boolean {
+  const qx = cx - bx
+  const ox = qx > 0 ? qx : 0
+  const outLen = Math.hypot(ox, oy)
+  const qMax = qx > qy ? qx : qy
+  const sd = outLen + (qMax < 0 ? qMax : 0) - r
+  if (sd > 0.75) return false
+  const distIn = sd < 0 ? -sd : 0
+  if (distIn >= effDepth) return false
+
+  evalBevelNormal(qx, qy, ox, oy, oyPow, outLen, distIn, effDepth, splayExp, n1, sd <= 0 ? 1 : 1 - sd / 0.75)
   return true
 }
 
@@ -771,6 +791,91 @@ export function releaseBevelField(hash: string): void {
   notifyStats()
 }
 
+function sampleChannel(
+  srcData: Uint8ClampedArray,
+  srcW: number,
+  maxX: number,
+  maxY: number,
+  sx: number,
+  sy: number,
+  ch: number,
+): number {
+  const cx = clamp(sx, 0, maxX)
+  const cy = clamp(sy, 0, maxY)
+  const x0 = cx | 0
+  const y0 = cy | 0
+  const x1 = x0 < maxX ? x0 + 1 : x0
+  const y1 = y0 < maxY ? y0 + 1 : y0
+  const fx = cx - x0
+  const fy = cy - y0
+  const invFx = 1 - fx
+  const r0 = y0 * srcW
+  const r1 = y1 * srcW
+  return (
+    (srcData[(r0 + x0) * 4 + ch] * invFx + srcData[(r0 + x1) * 4 + ch] * fx) * (1 - fy) +
+    (srcData[(r1 + x0) * 4 + ch] * invFx + srcData[(r1 + x1) * 4 + ch] * fx) * fy
+  )
+}
+
+function writeSampledPixel(
+  srcData: Uint8ClampedArray,
+  srcW: number,
+  maxX: number,
+  maxY: number,
+  out: Uint8ClampedArray,
+  dst: number,
+  bx: number,
+  by: number,
+  dx: number,
+  dy: number,
+  alphaByte: number,
+  spread: number,
+): void {
+  if (spread <= 0.0005 || (dx === 0 && dy === 0)) {
+    const cx = clamp(bx + dx, 0, maxX)
+    const cy = clamp(by + dy, 0, maxY)
+    const x0 = cx | 0
+    const y0 = cy | 0
+    const x1 = x0 < maxX ? x0 + 1 : x0
+    const y1 = y0 < maxY ? y0 + 1 : y0
+    const fx = cx - x0
+    const fy = cy - y0
+    const invFx = 1 - fx
+    const invFy = 1 - fy
+    const w00 = invFx * invFy
+    const w10 = fx * invFy
+    const w01 = invFx * fy
+    const w11 = fx * fy
+    const i00 = (y0 * srcW + x0) * 4
+    const i10 = (y0 * srcW + x1) * 4
+    const i01 = (y1 * srcW + x0) * 4
+    const i11 = (y1 * srcW + x1) * 4
+    out[dst] = srcData[i00] * w00 + srcData[i10] * w10 + srcData[i01] * w01 + srcData[i11] * w11
+    out[dst + 1] = srcData[i00 + 1] * w00 + srcData[i10 + 1] * w10 + srcData[i01 + 1] * w01 + srcData[i11 + 1] * w11
+    out[dst + 2] = srcData[i00 + 2] * w00 + srcData[i10 + 2] * w10 + srcData[i01 + 2] * w01 + srcData[i11 + 2] * w11
+    out[dst + 3] =
+      (alphaByte * (srcData[i00 + 3] * w00 + srcData[i10 + 3] * w10 + srcData[i01 + 3] * w01 + srcData[i11 + 3] * w11)) /
+      255
+    return
+  }
+
+  const m0 = 1 - spread
+  const m1 = 1 - spread * 0.5
+  const m3 = 1 + spread * 0.5
+  const m4 = 1 + spread
+  out[dst] =
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m0, by + dy * m0, 0) * 0.65 +
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m1, by + dy * m1, 0) * 0.35
+  out[dst + 1] =
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m1, by + dy * m1, 1) * 0.22 +
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx, by + dy, 1) * 0.56 +
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m3, by + dy * m3, 1) * 0.22
+  out[dst + 2] =
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m3, by + dy * m3, 2) * 0.35 +
+    sampleChannel(srcData, srcW, maxX, maxY, bx + dx * m4, by + dy * m4, 2) * 0.65
+  out[dst + 3] = (alphaByte * sampleChannel(srcData, srcW, maxX, maxY, bx + dx, by + dy, 3)) / 255
+}
+
 export function renderRefractedBevel(
   ctx: CanvasRenderingContext2D,
   outImageData: ImageData | null,
@@ -782,10 +887,14 @@ export function renderRefractedBevel(
   dispersion: number,
   tintColor = '',
   frost = 0,
+  magnification = 1,
 ): void {
   const dispCssPx = (clamp(refraction, 0, 100) / 100) * field.effectiveDepth * 1.5
   const hasRefract = dispCssPx > 0.001 && field.effectiveDepth > 0.5
-  if (!hasRefract && frost <= 0.05) {
+  const normMag = Number.isFinite(magnification) ? clamp(magnification, MIN_MAGNIFICATION, MAX_MAGNIFICATION) : 1
+  const invMag = 1 / normMag
+  const hasMag = Math.abs(invMag - 1) > 0.001
+  if (!hasRefract && !hasMag && frost <= 0.05) {
     ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
     return
   }
@@ -802,130 +911,155 @@ export function renderRefractedBevel(
     spread,
     parsedTint,
     frost,
+    invMag,
   )
 
   if (!usedWebGL) {
-    if (!hasRefract) {
+    if (!hasRefract && !hasMag) {
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
       return
     }
-    populateCpuBevelArrays(field)
     const srcData = snapshot.data
-    if (!field.count || !srcData.length) {
+    if (!srcData.length) {
       ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
       return
     }
 
-    const imgData = outImageData ?? ctx.createImageData(field.bufWidth, field.bufHeight)
-    const out = imgData.data
-    out.fill(0)
-
-    const { count, indices, px, py, vecX, vecY, alpha } = field
     const srcW = snapshot.width
     const srcScale = snapshot.scale
     const maxX = srcW - 1
     const maxY = snapshot.height - 1
-    const dispScale = dispCssPx * srcScale
-    const ratio = srcScale / field.scale
-    const baseX = offsetX * srcScale - 0.5
-    const baseY = offsetY * srcScale - 0.5
+    const dispScale = hasRefract ? dispCssPx * srcScale : 0
 
-    if (spread <= 0.0005) {
-      for (let i = 0; i < count; i++) {
-        const cx = clamp(baseX + (px[i] + 0.5) * ratio + vecX[i] * dispScale, 0, maxX)
-        const cy = clamp(baseY + (py[i] + 0.5) * ratio + vecY[i] * dispScale, 0, maxY)
-        const x0 = cx | 0
-        const y0 = cy | 0
-        const x1 = x0 < maxX ? x0 + 1 : x0
-        const y1 = y0 < maxY ? y0 + 1 : y0
-        const fx = cx - x0
-        const fy = cy - y0
-        const invFx = 1 - fx
-        const invFy = 1 - fy
-        const w00 = invFx * invFy
-        const w10 = fx * invFy
-        const w01 = invFx * fy
-        const w11 = fx * fy
-        const i00 = (y0 * srcW + x0) * 4
-        const i10 = (y0 * srcW + x1) * 4
-        const i01 = (y1 * srcW + x0) * 4
-        const i11 = (y1 * srcW + x1) * 4
-        const dst = indices[i] * 4
-        out[dst] = srcData[i00] * w00 + srcData[i10] * w10 + srcData[i01] * w01 + srcData[i11] * w11
-        out[dst + 1] = srcData[i00 + 1] * w00 + srcData[i10 + 1] * w10 + srcData[i01 + 1] * w01 + srcData[i11 + 1] * w11
-        out[dst + 2] = srcData[i00 + 2] * w00 + srcData[i10 + 2] * w10 + srcData[i01 + 2] * w01 + srcData[i11 + 2] * w11
-        out[dst + 3] =
-          (alpha[i] * (srcData[i00 + 3] * w00 + srcData[i10 + 3] * w10 + srcData[i01 + 3] * w01 + srcData[i11 + 3] * w11)) /
-          255
-      }
-    } else {
-      const m0 = 1 - spread
-      const m1 = 1 - spread * 0.5
-      const m3 = 1 + spread * 0.5
-      const m4 = 1 + spread
-      const S = (sx: number, sy: number, ch: number) => {
-        const cx = clamp(sx, 0, maxX)
-        const cy = clamp(sy, 0, maxY)
-        const x0 = cx | 0
-        const y0 = cy | 0
-        const x1 = x0 < maxX ? x0 + 1 : x0
-        const y1 = y0 < maxY ? y0 + 1 : y0
-        const fx = cx - x0
-        const fy = cy - y0
-        const invFx = 1 - fx
-        const r0 = y0 * srcW
-        const r1 = y1 * srcW
-        return (
-          (srcData[(r0 + x0) * 4 + ch] * invFx + srcData[(r0 + x1) * 4 + ch] * fx) * (1 - fy) +
-          (srcData[(r1 + x0) * 4 + ch] * invFx + srcData[(r1 + x1) * 4 + ch] * fx) * fy
-        )
-      }
-      for (let i = 0; i < count; i++) {
-        const bx = baseX + (px[i] + 0.5) * ratio
-        const by = baseY + (py[i] + 0.5) * ratio
-        const dx = vecX[i] * dispScale
-        const dy = vecY[i] * dispScale
-        const dst = indices[i] * 4
-        out[dst] = S(bx + dx * m0, by + dy * m0, 0) * 0.65 + S(bx + dx * m1, by + dy * m1, 0) * 0.35
-        out[dst + 1] =
-          S(bx + dx * m1, by + dy * m1, 1) * 0.22 + S(bx + dx, by + dy, 1) * 0.56 + S(bx + dx * m3, by + dy * m3, 1) * 0.22
-        out[dst + 2] = S(bx + dx * m3, by + dy * m3, 2) * 0.35 + S(bx + dx * m4, by + dy * m4, 2) * 0.65
-        out[dst + 3] = (alpha[i] * S(bx + dx, by + dy, 3)) / 255
-      }
-    }
+    if (hasMag) {
+      const imgData = outImageData ?? ctx.createImageData(field.bufWidth, field.bufHeight)
+      const out = imgData.data
+      out.fill(0)
 
-    const surface = getScratchContext(field.bufWidth, field.bufHeight)
-    if (!surface) {
-      ctx.putImageData(imgData, 0, 0)
-    } else {
-      surface.ctx.putImageData(imgData, 0, 0)
-      ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
-      const sx = offsetX * srcScale
-      const sy = offsetY * srcScale
-      const sw = field.width * srcScale
-      const sh = field.height * srcScale
-      if (sx >= 0 && sy >= 0 && sx + sw <= snapshot.width && sy + sh <= snapshot.height) {
-        ctx.drawImage(snapshot.canvas, sx, sy, sw, sh, 0, 0, field.bufWidth, field.bufHeight)
-      } else {
-        const csx = clamp(sx, 0, snapshot.width)
-        const csy = clamp(sy, 0, snapshot.height)
-        const csw = clamp(sx + sw, 0, snapshot.width) - csx
-        const csh = clamp(sy + sh, 0, snapshot.height) - csy
-        if (csw > 0 && csh > 0) {
-          ctx.drawImage(
-            snapshot.canvas,
-            csx,
-            csy,
-            csw,
-            csh,
-            ((csx - sx) / sw) * field.bufWidth,
-            ((csy - sy) / sh) * field.bufHeight,
-            (csw / sw) * field.bufWidth,
-            (csh / sh) * field.bufHeight,
-          )
+      const { hw, hh, bx, by, borderRadius: r, effectiveDepth, splayExp, cornerExponent, scale, bufWidth, bufHeight } =
+        field
+      const qW = Math.ceil(bufWidth * 0.5)
+      const qH = Math.ceil(bufHeight * 0.5)
+      const invS = 1 / scale
+      const n1 = cornerExponent - 1
+
+      for (let y = 0; y < qH; y++) {
+        const cyCss = hh - (y + 0.5) * invS
+        const qy = cyCss - by
+        const oy = qy > 0 ? qy : 0
+        const oyPow = oy > 0 ? Math.pow(oy, n1) : 0
+        const byT = (offsetY + hh - cyCss * invMag) * srcScale - 0.5
+        const byB = (offsetY + hh + cyCss * invMag) * srcScale - 0.5
+        const my = bufHeight - 1 - y
+        const rowT = y * bufWidth
+        const rowB = my * bufWidth
+
+        for (let x = 0; x < qW; x++) {
+          const cxCss = hw - (x + 0.5) * invS
+          const qx = cxCss - bx
+          const ox = qx > 0 ? qx : 0
+          const outLen = Math.hypot(ox, oy)
+          const qMax = qx > qy ? qx : qy
+          const sd = outLen + (qMax < 0 ? qMax : 0) - r
+          if (sd > 0.75) continue
+
+          const outerAlpha = sd <= 0 ? 1 : 1 - sd / 0.75
+          const aByte = Math.round(outerAlpha * 255)
+          if (!aByte) continue
+
+          const distIn = sd < 0 ? -sd : 0
+          let dx = 0
+          let dy = 0
+          if (hasRefract && distIn < effectiveDepth) {
+            evalBevelNormal(qx, qy, ox, oy, oyPow, outLen, distIn, effectiveDepth, splayExp, n1, outerAlpha)
+            dx = sdfScratch[0] * dispScale
+            dy = sdfScratch[1] * dispScale
+          }
+
+          const bxL = (offsetX + hw - cxCss * invMag) * srcScale - 0.5
+          const bxR = (offsetX + hw + cxCss * invMag) * srcScale - 0.5
+          const mx = bufWidth - 1 - x
+
+          writeSampledPixel(srcData, srcW, maxX, maxY, out, (rowT + x) * 4, bxL, byT, dx, dy, aByte, spread)
+          if (mx !== x) {
+            writeSampledPixel(srcData, srcW, maxX, maxY, out, (rowT + mx) * 4, bxR, byT, -dx, dy, aByte, spread)
+          }
+          if (my !== y) {
+            writeSampledPixel(srcData, srcW, maxX, maxY, out, (rowB + x) * 4, bxL, byB, dx, -dy, aByte, spread)
+          }
+          if (mx !== x && my !== y) {
+            writeSampledPixel(srcData, srcW, maxX, maxY, out, (rowB + mx) * 4, bxR, byB, -dx, -dy, aByte, spread)
+          }
         }
       }
-      ctx.drawImage(surface.canvas, 0, 0)
+
+      ctx.putImageData(imgData, 0, 0)
+    } else {
+      populateCpuBevelArrays(field)
+      if (!field.count) {
+        ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+        return
+      }
+
+      const imgData = outImageData ?? ctx.createImageData(field.bufWidth, field.bufHeight)
+      const out = imgData.data
+      out.fill(0)
+
+      const { count, indices, px, py, vecX, vecY, alpha } = field
+      const ratio = srcScale / field.scale
+      const baseX = offsetX * srcScale - 0.5
+      const baseY = offsetY * srcScale - 0.5
+
+      for (let i = 0; i < count; i++) {
+        writeSampledPixel(
+          srcData,
+          srcW,
+          maxX,
+          maxY,
+          out,
+          indices[i] * 4,
+          baseX + (px[i] + 0.5) * ratio,
+          baseY + (py[i] + 0.5) * ratio,
+          vecX[i] * dispScale,
+          vecY[i] * dispScale,
+          alpha[i],
+          spread,
+        )
+      }
+
+      const surface = getScratchContext(field.bufWidth, field.bufHeight)
+      if (!surface) {
+        ctx.putImageData(imgData, 0, 0)
+      } else {
+        surface.ctx.putImageData(imgData, 0, 0)
+        ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
+        const sx = offsetX * srcScale
+        const sy = offsetY * srcScale
+        const sw = field.width * srcScale
+        const sh = field.height * srcScale
+        if (sx >= 0 && sy >= 0 && sx + sw <= snapshot.width && sy + sh <= snapshot.height) {
+          ctx.drawImage(snapshot.canvas, sx, sy, sw, sh, 0, 0, field.bufWidth, field.bufHeight)
+        } else {
+          const csx = clamp(sx, 0, snapshot.width)
+          const csy = clamp(sy, 0, snapshot.height)
+          const csw = clamp(sx + sw, 0, snapshot.width) - csx
+          const csh = clamp(sy + sh, 0, snapshot.height) - csy
+          if (csw > 0 && csh > 0) {
+            ctx.drawImage(
+              snapshot.canvas,
+              csx,
+              csy,
+              csw,
+              csh,
+              ((csx - sx) / sw) * field.bufWidth,
+              ((csy - sy) / sh) * field.bufHeight,
+              (csw / sw) * field.bufWidth,
+              (csh / sh) * field.bufHeight,
+            )
+          }
+        }
+        ctx.drawImage(surface.canvas, 0, 0)
+      }
     }
   }
 

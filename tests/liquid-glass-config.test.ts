@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import {
+  acquireBevelField,
   buildBevelHash,
   clamp,
   clamp01,
@@ -15,6 +16,8 @@ import {
   LiquidGlassProvider,
   OPTICAL_MATERIAL_DEFAULTS,
   parseCssColorRgba,
+  releaseBevelField,
+  renderRefractedBevel,
   resetLiquidGlassConfig,
 } from '../src/index'
 
@@ -228,4 +231,69 @@ test('Shared pure optical utils and bevel hashing behave deterministically', () 
     buildBevelHash({ width: 120, height: 60, borderRadius: 24, depth: 20, splay: 35, scale: 1 }),
     '120x60_r24.0_d20.0_s35.0_sc1.00',
   )
+  assert.equal(DEFAULT_GLASS_CONFIG.magnification, 1)
+})
+
+test('renderRefractedBevel applies magnification (< 1 shrinks, > 1 enlarges) in CPU fallback', () => {
+  const width = 40
+  const height = 40
+  const snapData = new Uint8ClampedArray(width * height * 4)
+  // Paint a 16px-tall white horizontal band (y in [12, 28)) over a blue background.
+  for (let y = 0; y < height; y++) {
+    const inBand = y >= 12 && y < 28
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      snapData[i] = inBand ? 255 : 0
+      snapData[i + 1] = inBand ? 255 : 0
+      snapData[i + 2] = inBand ? 255 : 200
+      snapData[i + 3] = 255
+    }
+  }
+
+  const snapshot = {
+    data: snapData,
+    canvas: {} as HTMLCanvasElement,
+    version: 1,
+    width,
+    height,
+    scale: 1,
+    cssWidth: width,
+    cssHeight: height,
+  }
+  const { field } = acquireBevelField(
+    { width, height, borderRadius: 12, depth: 8, splay: 20, scale: 1 },
+    false,
+  )
+
+  try {
+    const outImg = { width, height, data: new Uint8ClampedArray(width * height * 4) } as ImageData
+    const ctx = {
+      clearRect() {},
+      putImageData() {},
+    } as unknown as CanvasRenderingContext2D
+
+    const pxAt = (x: number, y: number) => {
+      const i = (y * width + x) * 4
+      return [outImg.data[i], outImg.data[i + 1], outImg.data[i + 2], outImg.data[i + 3]]
+    }
+
+    // Minification (0.5x): 16px band shrinks to 8px ([16, 24)).
+    // Pixel (20, 14) is inside the original band, but outside the shrunk band -> samples blue background.
+    renderRefractedBevel(ctx, outImg, field, snapshot, 0, 0, 0, 0, '', 0, 0.5)
+    assert.deepEqual(pxAt(20, 20), [255, 255, 255, 255])
+    assert.deepEqual(pxAt(20, 14), [0, 0, 200, 255])
+    assert.deepEqual(pxAt(0, 0), [0, 0, 0, 0])
+
+    // Magnification (2.0x): 16px band expands to 32px ([4, 36)).
+    // Pixel (20, 8) is outside the original band, but inside the magnified band -> samples white band.
+    renderRefractedBevel(ctx, outImg, field, snapshot, 0, 0, 0, 0, '', 0, 2)
+    assert.deepEqual(pxAt(20, 8), [255, 255, 255, 255])
+
+    // Combined bevel refraction + dispersion + minification renders cleanly with AA rounded corners.
+    renderRefractedBevel(ctx, outImg, field, snapshot, 0, 0, 70, 20, '', 0, 0.65)
+    assert.deepEqual(pxAt(0, 0), [0, 0, 0, 0])
+    assert.deepEqual(pxAt(20, 20), [255, 255, 255, 255])
+  } finally {
+    releaseBevelField(field.hash)
+  }
 })

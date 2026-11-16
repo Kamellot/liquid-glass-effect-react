@@ -126,6 +126,7 @@ export function LiquidSwitch({
           refraction={Math.max(glass.refraction ?? 70, 85)}
           depth={8}
           splay={60}
+          magnification={glass.magnification}
           dispersion={Math.max(glass.dispersion ?? 20, 25)}
           frost={Math.min(glass.frost ?? 0, 10)}
           lightAngle={glass.lightAngle}
@@ -268,6 +269,7 @@ export function LiquidSegmentedControl<T extends string>({
           refraction={Math.max(glass.refraction ?? 70, 80)}
           depth={10}
           splay={60}
+          magnification={glass.magnification}
           dispersion={Math.max(glass.dispersion ?? 20, 25)}
           frost={0}
           lightAngle={glass.lightAngle}

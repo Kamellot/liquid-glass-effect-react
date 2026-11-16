@@ -10,6 +10,7 @@ export type LiquidGlassOptions = {
   dispersion?: number
   frost?: number
   splay?: number
+  magnification?: number
   lightMode?: LiquidGlassLightMode
   lightAngle?: number
   lightIntensity?: number

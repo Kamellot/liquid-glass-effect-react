@@ -22,7 +22,9 @@ import {
   generateDisplacementMap,
   isTransparentColor,
   isWebGLRefractionAvailable,
+  MAX_MAGNIFICATION,
   measureElementBox,
+  MIN_MAGNIFICATION,
   notifyGlassRedrawn,
   nowMs,
   OPTICAL_MATERIAL_DEFAULTS,
@@ -175,6 +177,7 @@ type RuntimeState = {
   refraction: number
   dispersion: number
   frost: number
+  magnification: number
   onMapUpdate: LiquidGlassProps['onMapUpdate']
 }
 
@@ -187,6 +190,7 @@ type LastDraw = {
   refraction: number
   dispersion: number
   frost: number
+  magnification: number
   tint: string
   fieldHash: string
 }
@@ -245,6 +249,7 @@ export const LiquidGlass = memo(
       dispersion: dispersionProp,
       frost: frostProp,
       splay: splayProp,
+      magnification: magnificationProp,
       lightMode: lightModeProp,
       lightAngle: lightAngleProp,
       lightIntensity: lightIntensityProp,
@@ -284,6 +289,10 @@ export const LiquidGlass = memo(
     const baseDispersion = dispersionProp ?? g?.dispersion ?? DEFAULT_GLASS_CONFIG.dispersion
     const frost = frostProp ?? g?.frost ?? DEFAULT_GLASS_CONFIG.frost
     const splay = splayProp ?? g?.splay ?? DEFAULT_GLASS_CONFIG.splay
+    const rawMagnification = magnificationProp ?? g?.magnification ?? DEFAULT_GLASS_CONFIG.magnification
+    const magnification = Number.isFinite(rawMagnification)
+      ? clamp(rawMagnification, MIN_MAGNIFICATION, MAX_MAGNIFICATION)
+      : 1
     const lightMode = lightModeProp ?? g?.lightMode ?? DEFAULT_GLASS_CONFIG.lightMode
     const lightAngle = lightAngleProp ?? g?.lightAngle ?? DEFAULT_GLASS_CONFIG.lightAngle
     const lightIntensity = lightIntensityProp ?? g?.lightIntensity ?? DEFAULT_GLASS_CONFIG.lightIntensity
@@ -311,12 +320,14 @@ export const LiquidGlass = memo(
       refraction: 0,
       dispersion: 0,
       frost: 0,
+      magnification: 1,
       onMapUpdate: undefined,
     })
     rt.reduced = reducedMotion
     rt.refraction = refraction
     rt.dispersion = dispersion
     rt.frost = frost
+    rt.magnification = magnification
     rt.onMapUpdate = onMapUpdate
 
     const setRootRef = useCallback(
@@ -386,14 +397,15 @@ export const LiquidGlass = memo(
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      const { refraction: curRef, dispersion: curDisp, frost: curFrost, tint: curTint } = rt
+      const { refraction: curRef, dispersion: curDisp, frost: curFrost, tint: curTint, magnification: curMag } = rt
+      const hasMag = Math.abs(1 / curMag - 1) > 0.001
       const webgl = isWebGLRefractionAvailable()
       const snapshot = getTargetSnapshot(targetEl, root)
       const syncSize = () => {
         if (canvas.width !== field.bufWidth) canvas.width = field.bufWidth
         if (canvas.height !== field.bufHeight) canvas.height = field.bufHeight
       }
-      if (!snapshot || (curRef <= 0.01 && !(webgl && curFrost > 0.05))) {
+      if (!snapshot || (curRef <= 0.01 && !hasMag && !(webgl && curFrost > 0.05))) {
         syncSize()
         ctx.clearRect(0, 0, field.bufWidth, field.bufHeight)
         rt.last = null
@@ -414,6 +426,7 @@ export const LiquidGlass = memo(
         prev.refraction === curRef &&
         prev.dispersion === curDisp &&
         prev.frost === effectiveFrost &&
+        prev.magnification === curMag &&
         prev.tint === curTint &&
         prev.fieldHash === field.hash
       ) {
@@ -425,7 +438,19 @@ export const LiquidGlass = memo(
         rt.outImg = ctx.createImageData(field.bufWidth, field.bufHeight)
       }
 
-      renderRefractedBevel(ctx, rt.outImg, field, snapshot, offsetX, offsetY, curRef, curDisp, curTint, curFrost)
+      renderRefractedBevel(
+        ctx,
+        rt.outImg,
+        field,
+        snapshot,
+        offsetX,
+        offsetY,
+        curRef,
+        curDisp,
+        curTint,
+        curFrost,
+        curMag,
+      )
       rt.last = {
         version: snapshot.version,
         offsetX,
@@ -433,6 +458,7 @@ export const LiquidGlass = memo(
         refraction: curRef,
         dispersion: curDisp,
         frost: effectiveFrost,
+        magnification: curMag,
         tint: curTint,
         fieldHash: field.hash,
       }
@@ -489,7 +515,7 @@ export const LiquidGlass = memo(
         field.hash,
       )
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [refraction, dispersion, frost, drawFrame])
+    }, [refraction, dispersion, frost, magnification, drawFrame])
 
     useIsomorphicLayoutEffect(() => {
       const root = rootRef.current
