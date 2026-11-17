@@ -1,4 +1,4 @@
-name: Publish to npmjs
+name: Publish to npmjs and GitHub Packages
 
 on:
   push:
@@ -14,6 +14,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
 
     steps:
       - name: Checkout repository
@@ -41,3 +42,18 @@ jobs:
           else
             npm stage publish --provenance --access public --loglevel verbose
           fi
+
+      - name: Publish package to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp package.json package.json.bak
+          trap 'mv package.json.bak package.json' EXIT
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = '@kamellot/liquid-glass-effect-react';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
+          npm publish --registry https://npm.pkg.github.com --ignore-scripts --loglevel verbose

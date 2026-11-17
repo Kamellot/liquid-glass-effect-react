@@ -1,4 +1,6 @@
-# liquid-glass-react
+# liquid-glass-effect-react
+
+[![npm version](https://img.shields.io/npm/v/liquid-glass-effect-react)](https://www.npmjs.com/package/liquid-glass-effect-react)
 
 Lightweight, zero-dependency React optical glass and edge-refraction component powered by a 1/4-quadrant Signed Distance Field (SDF) WebGL/Canvas engine and GPU-composited CSS optics.
 
@@ -12,20 +14,20 @@ Lightweight, zero-dependency React optical glass and edge-refraction component p
 ## Installation
 
 ```bash
-npm install liquid-glass-react
+npm install liquid-glass-effect-react
 ```
 
 ```bash
-pnpm add liquid-glass-react
+pnpm add liquid-glass-effect-react
 ```
 
 ```bash
-yarn add liquid-glass-react
+yarn add liquid-glass-effect-react
 ```
 
 **Peer dependencies:** `react` (`^18.0.0 || ^19.0.0`) and `react-dom` (`^18.0.0 || ^19.0.0`).
 
-Styles are imported automatically by the package entry (`liquid-glass-react/styles.css` is also exported if your setup requires an explicit stylesheet import).
+Styles are imported automatically by the package entry (`liquid-glass-effect-react/styles.css` is also exported if your setup requires an explicit stylesheet import).
 
 ---
 
@@ -37,7 +39,7 @@ Drop `<LiquidGlass />` inside an existing container that already defines its own
 
 ```tsx
 import { useRef } from 'react'
-import { LiquidGlass } from 'liquid-glass-react'
+import { LiquidGlass } from 'liquid-glass-effect-react'
 
 export function FloatingBar() {
   const sceneRef = useRef<HTMLDivElement>(null)
@@ -77,7 +79,7 @@ Use `mode="wrapper"` when `<LiquidGlass />` should act as the container itself, 
 
 ```tsx
 import { useRef } from 'react'
-import { LiquidGlass } from 'liquid-glass-react'
+import { LiquidGlass } from 'liquid-glass-effect-react'
 
 export function SearchPill() {
   const sceneRef = useRef<HTMLElement>(null)
@@ -140,7 +142,7 @@ export function SearchPill() {
 You can set app-wide defaults once via `configureLiquidGlass()` without wrapping your component tree, or scope overrides to a subtree with `<LiquidGlassProvider>`:
 
 ```tsx
-import { configureLiquidGlass, LiquidGlassProvider } from 'liquid-glass-react'
+import { configureLiquidGlass, LiquidGlassProvider } from 'liquid-glass-effect-react'
 
 // App-wide defaults (no provider wrapper required)
 configureLiquidGlass({
