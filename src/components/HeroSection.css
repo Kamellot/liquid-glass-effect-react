@@ -1,0 +1,319 @@
+.hero {
+  position: relative;
+  width: 100%;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 96px 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.hero-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--app-bg);
+}
+
+.hero-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(180deg, rgba(17, 16, 22, 0) 50%, rgba(17, 16, 22, 1) 95%),
+    linear-gradient(90deg, rgba(17, 16, 22, 1) 0%, rgba(17, 16, 22, 0) 60%);
+}
+
+.hero-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px clamp(24px, 4.25vw, 64px);
+}
+
+.hero-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+.hero-brand:focus-visible,
+.hero-nav-npm:focus-visible,
+.hero-nav-github:focus-visible,
+.hero-install-pill:focus-visible {
+  outline: 2px solid #8383ff;
+  outline-offset: 2px;
+}
+
+.hero-brand-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+.hero-brand-name {
+  color: #f1f1fa;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.hero-brand-react {
+  color: #8383ff;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.hero-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hero-nav-npm,
+.hero-nav-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  color: #dfdfed;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.hero-nav-npm:hover {
+  background: rgba(223, 223, 237, 0.08);
+}
+
+.hero-box-light {
+  background: rgba(223, 223, 237, 0.12);
+  box-shadow:
+    0 1px 3px 0 rgba(17, 16, 22, 0.06),
+    0 3px 12px 0 rgba(17, 16, 22, 0.04),
+    inset 0 0.5px 0.5px 0.1px rgba(223, 223, 237, 0.2);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.hero-box-light:hover {
+  background: rgba(223, 223, 237, 0.16);
+}
+
+.hero-box-light:active {
+  transform: scale(0.985);
+}
+
+.hero-spacer {
+  height: 0;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 32px;
+  padding: 64px clamp(32px, 8.47vw, 128px) 128px;
+}
+
+.hero-heading {
+  margin: 0;
+  color: #f1f1fa;
+  font-size: 57px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.hero-heading-line {
+  display: block;
+}
+
+.hero-heading-accent {
+  color: #8383ff;
+}
+
+.hero-mobile-break {
+  display: none;
+}
+
+.hero-install-pill {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 12px;
+  color: #dfdfed;
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: -0.0025em;
+  white-space: nowrap;
+  transition: background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.hero-install-pill[data-copied='true'] {
+  background: rgba(131, 131, 255, 0.18);
+  box-shadow:
+    0 1px 3px 0 rgba(17, 16, 22, 0.06),
+    0 3px 12px 0 rgba(17, 16, 22, 0.04),
+    inset 0 0.5px 0.5px 0.1px rgba(131, 131, 255, 0.45);
+}
+
+.hero-install-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.hero-copy-svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+}
+
+.hero-install-text {
+  display: inline-block;
+}
+
+.hero-footer {
+  position: relative;
+  z-index: 1;
+  padding: 0 clamp(32px, 8.47vw, 128px);
+}
+
+.hero-tagline {
+  margin: 0;
+  color: #c1c1ce;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.hero-glass-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  border-radius: 50%;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  will-change: transform;
+}
+
+.hero-glass-handle[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.hero-glass-handle:focus-visible {
+  outline: 2px solid #8383ff;
+  outline-offset: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 767px) {
+  .hero {
+    padding: 48px 0;
+  }
+
+  .hero-header {
+    padding: 20px 20px;
+  }
+
+  .hero-brand-name,
+  .hero-brand-react {
+    display: none;
+  }
+
+  .hero-nav {
+    gap: 6px;
+  }
+
+  .hero-content {
+    justify-content: flex-end;
+    gap: 32px;
+    padding: 96px 20px;
+  }
+
+  .hero-heading {
+    font-size: 48px;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+  }
+
+  .hero-mobile-break {
+    display: inline;
+  }
+
+  .hero-install-pill {
+    padding: 10px 20px;
+    font-size: 16px;
+    line-height: 1.5;
+    letter-spacing: 0;
+  }
+
+  .hero-copy-svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .hero-footer {
+    padding: 0 20px;
+  }
+
+  .hero-tagline {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+}
+
+@media (max-width: 359px) {
+  .hero-install-pill {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-nav-npm,
+  .hero-nav-github,
+  .hero-install-pill {
+    transition: none;
+  }
+}

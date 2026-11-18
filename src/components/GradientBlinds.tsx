@@ -286,6 +286,9 @@ export interface GradientBlindsProps {
   intro?: boolean;
   mixBlendMode?: CSSProperties['mixBlendMode'] | (string & {});
   lightMode?: boolean;
+  spotlightOrigin?: [number, number];
+  preserveDrawingBuffer?: boolean;
+  onDraw?: () => void;
 }
 
 const GradientBlinds = ({
@@ -318,7 +321,10 @@ const GradientBlinds = ({
   idle = 'drift',
   intro = true,
   mixBlendMode = 'lighten',
-  lightMode = false
+  lightMode = false,
+  spotlightOrigin = [0.5, 0.5],
+  preserveDrawingBuffer = false,
+  onDraw
 }: GradientBlindsProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -352,7 +358,10 @@ const GradientBlinds = ({
     idle,
     intro,
     lightMode,
-    dpr
+    spotlightOrigin,
+    dpr,
+    preserveDrawingBuffer,
+    onDraw
   };
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -365,7 +374,8 @@ const GradientBlinds = ({
       antialias: false,
       depth: false,
       stencil: false,
-      premultipliedAlpha: false
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: settingsRef.current.preserveDrawingBuffer
     });
     if (!container || !canvas || !gl) return undefined;
     const shader = link(gl);
@@ -437,18 +447,20 @@ const GradientBlinds = ({
       gl.uniform1f(u.uGradientShift, shift);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);
+      s.onDraw?.();
     };
 
     const aim = (s: typeof settingsRef.current) => {
+      const [ox, oy] = s.spotlightOrigin ?? [0.5, 0.5];
       if (pointer.inside) {
         light.tx = pointer.x;
         light.ty = pointer.y;
       } else if (s.idle === 'center') {
-        light.tx = view.width / 2;
-        light.ty = view.height / 2;
+        light.tx = view.width * ox;
+        light.ty = view.height * oy;
       } else if (s.idle === 'drift' && !reduce) {
-        light.tx = view.width * (0.5 + 0.22 * Math.sin(swayTime * 0.23) + 0.05 * Math.sin(swayTime * 0.61 + 1.3));
-        light.ty = view.height * (0.5 + 0.16 * Math.sin(swayTime * 0.31 + 0.7) + 0.04 * Math.sin(swayTime * 0.83));
+        light.tx = view.width * (ox + 0.22 * Math.sin(swayTime * 0.23) + 0.05 * Math.sin(swayTime * 0.61 + 1.3));
+        light.ty = view.height * (oy + 0.16 * Math.sin(swayTime * 0.31 + 0.7) + 0.04 * Math.sin(swayTime * 0.83));
       }
     };
 
@@ -482,9 +494,10 @@ const GradientBlinds = ({
       canvas.width = Math.max(1, Math.round(view.width * view.ratio));
       canvas.height = Math.max(1, Math.round(view.height * view.ratio));
       if (!light.ready) {
+        const [ox, oy] = s.spotlightOrigin ?? [0.5, 0.5];
         light.ready = true;
-        light.x = light.tx = view.width / 2;
-        light.y = light.ty = view.height / 2;
+        light.x = light.tx = view.width * ox;
+        light.y = light.ty = view.height * oy;
       }
       draw();
       wake();
