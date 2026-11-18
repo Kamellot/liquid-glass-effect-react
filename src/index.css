@@ -4,13 +4,17 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-bg: #111016;
+}
+
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: #06070a;
+  background: var(--app-bg);
 }
 
 .app-shell {
@@ -22,4 +26,5 @@ body,
   position: fixed;
   inset: 0;
   z-index: 0;
+  background: var(--app-bg);
 }

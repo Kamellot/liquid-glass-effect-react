@@ -1,24 +1,27 @@
-import ColorBends from './components/ColorBends';
+import GradientBlinds from './components/GradientBlinds';
 
 export default function App() {
   return (
     <main className="app-shell">
       <div className="app-backdrop" aria-hidden="true">
-        <ColorBends
-          colors={['#5568f7']}
-          rotation={-29}
-          speed={0.1}
-          scale={3.2}
-          frequency={1.7}
-          warpStrength={1}
-          mouseInfluence={0}
-          noise={0.13}
-          parallax={0}
-          iterations={1}
-          intensity={0.7}
-          bandWidth={6}
-          transparent
-          autoRotate={-1}
+        <GradientBlinds
+          gradientColors={['#1625f9', '#6366f1', '#1e3a8a']}
+          angle={1}
+          blindCount={64}
+          blindMinWidth={60}
+          spotlightRadius={0.47}
+          shine={0.67}
+          relief={0.92}
+          glow={0.35}
+          sway={0.41}
+          hoverTilt={0.45}
+          clickEffect="ripple"
+          noise={0.24}
+          spotlightSoftness={1.15}
+          lightColor="#f6caff"
+          perspective={0.06}
+          gradientSpeed={3.95}
+          distortAmount={9}
         />
       </div>
     </main>
